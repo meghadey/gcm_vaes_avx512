@@ -1,24 +1,26 @@
-.section        .rodata.cst16.POLY, "aM", @progbits, 16
+.data
+
 .align 16
-POLY:           .octa   0xC2000000000000000000000000000001
+POLY:
+.octa   0xC2000000000000000000000000000001
 
-.section        .rodata.cst16.TWOONE, "aM", @progbits, 16
 .align 16
-TWOONE:         .octa   0x00000001000000000000000000000001
+TWOONE:
+.octa   0x00000001000000000000000000000001
 
-.section        .rodata.cst64.POLY2, "aM", @progbits, 64
 .align 64
-POLY2:          .octa   0xC20000000000000000000001C2000000
-                .octa   0xC20000000000000000000001C2000000
-                .octa   0xC20000000000000000000001C2000000
-                .octa   0xC20000000000000000000001C2000000
+POLY2:
+.octa   0xC20000000000000000000001C2000000
+.octa   0xC20000000000000000000001C2000000
+.octa   0xC20000000000000000000001C2000000
+.octa   0xC20000000000000000000001C2000000
 
-.section        .rodata.cst64.SHUF_MASK, "aM", @progbits, 64
 .align 64
-SHUF_MASK:      .octa   0x000102030405060708090A0B0C0D0E0F
-                .octa   0x000102030405060708090A0B0C0D0E0F
-                .octa   0x000102030405060708090A0B0C0D0E0F
-                .octa   0x000102030405060708090A0B0C0D0E0F
+SHUF_MASK:
+.octa   0x000102030405060708090A0B0C0D0E0F
+.octa   0x000102030405060708090A0B0C0D0E0F
+.octa   0x000102030405060708090A0B0C0D0E0F
+.octa   0x000102030405060708090A0B0C0D0E0F
 
 .text
 
@@ -84,6 +86,16 @@ SHUF_MASK:      .octa   0x000102030405060708090A0B0C0D0E0F
 #define HashKey_1       (16*62)
 #define HashKey         (16*62)
 
+#define InLen           ((16*1)+8)
+#define PBlockLen       (16*5)
+#define CurCount        (16*4)
+#define OrigIV          (16*3)
+#define AadLen          (16*1)
+#%define AadHash        (16*0)
+
+#define xmm2z zmm2
+#define ymm11x xmm11
+#define zmm11y ymm11
 #define xmm5y ymm5
 #define xmm5x xmm5
 #define ymm5x xmm5
@@ -329,12 +341,8 @@ SHUF_MASK:      .octa   0x000102030405060708090A0B0C0D0E0F
         GHASH_MUL(T5, HK, T1, T3, T4, T6, T2)   \
         vmovdqu T5, HashKey_48(GDATA);           \
 
-#define simd_store_avx(DST, SRC, SIZE, TMP, IDX)	\
+#define simd_store_avx_15(DST, SRC, SIZE, TMP, IDX)	\
 	xor IDX, IDX;		\
-	test	$16, SIZE;	\
-	jz	lt16;		\
-	vmovdqu	SRC, (DST);	\
-	jmp	end;		\
 lt16:;	\
 	test	$8, SIZE;       \
 	jz      lt8;           	\
@@ -360,12 +368,16 @@ lt2:;\
 	mov	BYTE(TMP), (DST, IDX, 1);	\
 end:;
 
-#define VCLMUL_STEP1(KP, HI, TMP, TH, TM, TL, HKEY, NP) \
-        .if NP == 6;                                    \
+#define VCLMUL_STEP1_6(KP, HI, TMP, TH, TM, TL) \
         vmovdqu64       HashKey_4(KP) , TMP;            \
-        .else;                                          \
-        vmovdqa64       HKEY, TMP;                      \
-        .endif;                                         \
+        vpclmulqdq      $0x11, TMP, HI, TH;             \
+        vpclmulqdq      $0x00, TMP, HI, TL;             \
+        vpclmulqdq      $0x01, TMP, HI, TM;             \
+        vpclmulqdq      $0x10, TMP, HI, TMP;            \
+        vpxorq          TMP, TM, TM;
+
+#define VCLMUL_STEP1_7(KP, HI, TMP, TH, TM, TL, HKEY) \
+        vmovdqa64       HKEY , TMP;            \
         vpclmulqdq      $0x11, TMP, HI, TH;             \
         vpclmulqdq      $0x00, TMP, HI, TL;             \
         vpclmulqdq      $0x01, TMP, HI, TM;             \
@@ -382,12 +394,8 @@ end:;
         vextracti32x4   $1, REG, XWORD(TMP);                    \
         vpxorq          XWORD(TMP), XWORD(REG), XWORD(REG);
 
-#define VCLMUL_STEP2(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, HKEY, HXOR, NP)  \
-        .if NP == 9;                                            \
+#define VCLMUL_STEP2_9(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL)  \
         vmovdqu64       HashKey_8(KP), TMP0;                    \
-        .else;                                                  \
-        vmovdqa64       HKEY, TMP0;                             \
-        .endif;                                                 \
         vpclmulqdq      $0x10, TMP0, LO, TMP1;                  \
         vpclmulqdq      $0x11, TMP0, LO, TMP2;                  \
         vpxorq          TMP2, TH, TH;                           \
@@ -399,10 +407,23 @@ end:;
         vpxorq          TMP2, TH, HI;                           \
         vpslldq         $8, TM, TMP2;                           \
         vpxorq          TMP2, TL, LO;                           \
-        .if NP < 11;                                            \
         VHPXORI4x128(HI, TMP2)                                  \
         VHPXORI4x128(LO, TMP1)                                  \
-        .elseif HXOR == 4;                                      \
+
+#define VCLMUL_STEP2_11(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, HKEY, HXOR)  \
+        vmovdqa64       HKEY, TMP0;                             \
+        vpclmulqdq      $0x10, TMP0, LO, TMP1;                  \
+        vpclmulqdq      $0x11, TMP0, LO, TMP2;                  \
+        vpxorq          TMP2, TH, TH;                           \
+        vpclmulqdq      $0x00, TMP0, LO, TMP2;                  \
+        vpxorq          TMP2, TL, TL;                           \
+        vpclmulqdq      $0x01, TMP0, LO, TMP0;                  \
+        vpternlogq      $0x96, TMP0, TMP1, TM;                  \
+        vpsrldq         $8, TM, TMP2;                           \
+        vpxorq          TMP2, TH, HI;                           \
+        vpslldq         $8, TM, TMP2;                           \
+        vpxorq          TMP2, TL, LO;                           \
+        .if HXOR == 4;                                      \
         VHPXORI4x128(HI, TMP2)                                  \
         VHPXORI4x128(LO, TMP1)                                  \
         .elseif HXOR == 2;                                      \
@@ -422,19 +443,19 @@ end:;
 
 #define VCLMUL_1_TO_8_STEP1(KP, HI, TMP1, TMP2, TH, TM, TL, NBLOCKS)    \
         .if NBLOCKS == 8;                                               \
-                VCLMUL_STEP1(KP, HI, TMP1, TH, TM, TL, NULL, 6)         \
+                VCLMUL_STEP1_6(KP, HI, TMP1, TH, TM, TL)         \
         .elseif NBLOCKS == 7;                                           \
                 vmovdqu64       HashKey_3(KP), TMP2;                    \
                 vmovdqa64      (%rip), TMP1;                            \
                 vpandq          TMP1, TMP2, TMP2;                             \
                 vpandq          TMP1, HI, HI;                               \
-                VCLMUL_STEP1(NULL, HI, TMP1, TH, TM, TL, TMP2, 7)       \
+                VCLMUL_STEP1_7(NULL, HI, TMP1, TH, TM, TL, TMP2)       \
         .elseif NBLOCKS == 6;                                           \
                 vmovdqu64       HashKey_2(KP), YWORD(TMP2);             \
-                VCLMUL_STEP1(NULL, YWORD(HI), YWORD(TMP1), YWORD(TH), YWORD(TM), YWORD(TL), YWORD(TMP2), 7)     \
+                VCLMUL_STEP1_7(NULL, YWORD(HI), YWORD(TMP1), YWORD(TH), YWORD(TM), YWORD(TL), YWORD(TMP2))     \
         .elseif NBLOCKS == 5;                                   \
                 vmovdqu64       HashKey_1(KP), XWORD(TMP2);     \
-                VCLMUL_STEP1(NULL, XWORD(HI), XWORD(TMP1), XWORD(TH), XWORD(TM), XWORD(TL), XWORD(TMP2), 7)     \
+                VCLMUL_STEP1_7(NULL, XWORD(HI), XWORD(TMP1), XWORD(TH), XWORD(TM), XWORD(TL), XWORD(TMP2))     \
         .else;                                                   \
                 vpxorq          TH, TH, TH;                     \
                 vpxorq          TM, TM, TM;                     \
@@ -443,31 +464,31 @@ end:;
 
 #define VCLMUL_1_TO_8_STEP2(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, NBLOCKS)  \
         .if NBLOCKS == 8;                                                       \
-                VCLMUL_STEP2(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, NULL, NULL, 9)           \
+                VCLMUL_STEP2_9(KP, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL)           \
         .elseif NBLOCKS == 7;                                                   \
                 vmovdqu64       HashKey_7(KP), TMP2;                            \
-                VCLMUL_STEP2(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4, 11)   \
+                VCLMUL_STEP2_11(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4)   \
         .elseif NBLOCKS == 6;                                                   \
                 vmovdqu64       HashKey_6(KP), TMP2;                            \
-                VCLMUL_STEP2(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4, 11)   \
+                VCLMUL_STEP2_11(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4)   \
         .elseif NBLOCKS == 5;                                                   \
                 vmovdqu64       HashKey_5(KP), TMP2;                            \
-                VCLMUL_STEP2(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4, 11)   \
+                VCLMUL_STEP2_11(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4)   \
         .elseif NBLOCKS == 4;                                                   \
                 vmovdqu64       HashKey_4(KP), TMP2;                            \
-                VCLMUL_STEP2(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4, 11)   \
+                VCLMUL_STEP2_11(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4)   \
         .elseif NBLOCKS == 3;                                                   \
                 vmovdqu64       HashKey_3(KP), TMP2;                            \
                 vmovdqa64       (%rip), TMP1;                                   \
                 vpandq          TMP1, TMP2, TMP2;                                       \
                 vpandq          TMP1, LO, LO;                                   \
-                VCLMUL_STEP2(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4, 11)   \
+                VCLMUL_STEP2_11(NULL, HI, LO, TMP0, TMP1, TMP2, TH, TM, TL, TMP2, 4)   \
         .elseif NBLOCKS == 2;                                                   \
                 vmovdqu64       HashKey_2(KP), YWORD(TMP2);                     \
-                VCLMUL_STEP2(NULL, YWORD(HI), YWORD(LO), YWORD(TMP0), YWORD(TMP1), YWORD(TMP2), YWORD(TH), YWORD(TM), YWORD(TL), YWORD(TMP2), 2, 11)            \
+                VCLMUL_STEP2_11(NULL, YWORD(HI), YWORD(LO), YWORD(TMP0), YWORD(TMP1), YWORD(TMP2), YWORD(TH), YWORD(TM), YWORD(TL), YWORD(TMP2), 2)            \
         .elseif NBLOCKS == 1;                           \
                 vmovdqu64       HashKey_1(KP), XWORD(TMP2);                     \
-                VCLMUL_STEP2(NULL, XWORD(HI), XWORD(LO), XWORD(TMP0), XWORD(TMP1), XWORD(TMP2), XWORD(TH), XWORD(TM), XWORD(TL), XWORD(TMP2), 1, 11)            \
+                VCLMUL_STEP2_11(NULL, XWORD(HI), XWORD(LO), XWORD(TMP0), XWORD(TMP1), XWORD(TMP2), XWORD(TH), XWORD(TM), XWORD(TL), XWORD(TMP2), 1)            \
         .else;                                          \
                 vpxorq          HI, HI, HI;             \
                 vpxorq          LO, LO, LO;             \
@@ -479,48 +500,48 @@ end:;
         vpxorq          AAD_HASH, AAD_HASH, AAD_HASH;   \
         vmovdqa64       SHUF_MASK(%rip), SHFMSK;        \
         vmovdqa64       POLY2(%rip), POLY;              \
-_get_AAD_loop128:;                                      \
+13:;                                      \
         cmp             $128, T2;                       \
-        jl              _exit_AAD_loop128;              \
+        jl              14f;              \
         vmovdqu64       64*0(T1), ZT2;                  \
         vmovdqu64       64*1(T1), ZT1;                  \
         vpshufb         SHFMSK, ZT2, ZT2;               \
         vpshufb         SHFMSK, ZT1, ZT1;               \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         \
-        VCLMUL_STEP1(GDATA_KEY, ZT1, ZT0, TH, TM, TL, NULL, 6)   \
-        VCLMUL_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, NULL, NULL, 9)    \
+        VCLMUL_STEP1_6(GDATA_KEY, ZT1, ZT0, TH, TM, TL)   \
+        VCLMUL_STEP2_9(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL)    \
         VCLMUL_REDUCE(AAD_HASH, XWORD(POLY), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))    \
         \
         sub             $128, T2;                       \
-        je              _CALC_AAD_done;                 \
+        je              12f;                 \
         add             $128, T1;                       \
-        jmp             _get_AAD_loop128;               \
+        jmp             13b;               \
         \
-_exit_AAD_loop128:;                             \
+14:;                             \
         or              T2, T2;                 \
-        jz              _CALC_AAD_done;         \
+        jz              12f;         \
         lea             (%rip), T3;             \
         lea             (T3, T2, 8), T3;        \
         add             $15, T2;                \
         and             $-16, T2;               \
         shr             $4, T2;                 \
         cmp             $7, T2;                 \
-        je              _AAD_blocks_7;          \
+        je              7f;          \
         cmp             $6, T2;         \
-        je              _AAD_blocks_6;          \
+        je              6f;          \
         cmp             $5, T2;         \
-        je              _AAD_blocks_5;          \
+        je              5f;          \
         cmp             $4, T2;         \
-        je              _AAD_blocks_4;          \
+        je              4f;          \
         cmp             $3, T2;         \
-        je              _AAD_blocks_3;          \
+        je              3f;          \
         cmp             $2, T2;         \
-        je              _AAD_blocks_2;          \
+        je              2f;          \
         cmp             $1, T2;         \
-        je              _AAD_blocks_1;          \
+        je              1f;          \
         \
-_AAD_blocks_8:;                                         \
+8:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2;                      \
@@ -530,8 +551,8 @@ _AAD_blocks_8:;                                         \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 8)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 8)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_7:;                                         \
+        jmp             11f;               \
+7:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2;                      \
@@ -541,8 +562,8 @@ _AAD_blocks_7:;                                         \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 7)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 7)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_6:;                                         \
+        jmp             11f;               \
+6:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2;                      \
@@ -552,8 +573,8 @@ _AAD_blocks_6:;                                         \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 6)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 6)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_5:;                                         \
+        jmp             11f;               \
+5:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2;                      \
@@ -563,41 +584,116 @@ _AAD_blocks_5:;                                         \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 5)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 5)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_4:;                                         \
+        jmp             11f;               \
+4:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2{MASKREG}{z};          \
         vpshufb         SHFMSK, ZT2, ZT2;               \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 4)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 4)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_3:;                                         \
+        jmp             11f;               \
+3:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2{MASKREG}{z};          \
         vpshufb         SHFMSK, ZT2, ZT2;               \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 3)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 3)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_2:;                                         \
+        jmp             11f;               \
+2:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), YWORD(ZT2){MASKREG}{z};          \
         vpshufb         YWORD(SHFMSK), YWORD(ZT2), YWORD(ZT2);               \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 2)    \
 	VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 2)  \
-        jmp             _AAD_blocks_done;               \
-_AAD_blocks_1:;                                         \
+        jmp             11f;               \
+1:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), XWORD(ZT2){MASKREG}{z};          \
         vpshufb         XWORD(SHFMSK), XWORD(ZT2), XWORD(ZT2);               \
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 1)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 1)  \
-_AAD_blocks_done:;                                      \
+11:;                                      \
         VCLMUL_REDUCE(AAD_HASH, XWORD(POLY), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))    \
-_CALC_AAD_done:;
+12:;
+
+#define CALC_J0(KEY, IV, IV_LEN, J0, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, T1, T2, T3, MASKREG)       \
+        CALC_AAD_HASH(IV, IV_LEN, J0, KEY, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, T1, T2, T3, MASKREG)       \
+	mov             IV_LEN, T1;             \
+        shl             $3, T1;                 \
+        vmovq           T1, XWORD(ZT2);         \
+	vpxorq          ZWORD(J0), ZT2, ZT2;         \
+	VCLMUL_1_TO_8_STEP1(KEY, ZT1, ZT0, ZT3, ZT7, ZT6, ZT5, 1)  \
+        VCLMUL_1_TO_8_STEP2(KEY, ZT1, ZT2, ZT0, ZT3, ZT4, ZT7, ZT6, ZT5, 1)        \
+        VCLMUL_REDUCE(J0, XWORD(ZT8), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))  \
+        vpshufb         SHUF_MASK(%rip), J0, J0;
+
+#define GCM_INIT(GDATA_KEY, GDATA_CTX, IV, A_IN, A_LEN, GPR1, GPR2, GPR3, MASKREG, AAD_HASH, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, IV_LEN)    \
+        CALC_AAD_HASH(A_IN, A_LEN, AAD_HASH, GDATA_KEY, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)    \
+        mov             A_LEN, GPR1;                    \
+        vmovdqu64       AAD_HASH, (GDATA_CTX);          \
+        mov             GPR1, 16(GDATA_CTX);        \
+        xor             GPR1, GPR1;                     \
+        mov             GPR1, InLen(GDATA_CTX);         \
+        mov             GPR1, PBlockLen(GDATA_CTX);     \
+	CALC_J0(GDATA_KEY, IV, IV_LEN, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)  \
+        vmovdqu64       CUR_COUNT, OrigIV(GDATA_CTX);   \
+        vpshufb         SHUF_MASK(%rip), CUR_COUNT, CUR_COUNT;     \
+        vmovdqu         CUR_COUNT, CurCount(GDATA_CTX);
+
+#define GCM_COMPLETE(GDATA_KEY, GDATA_CTX, AUTH_TAG, AUTH_TAG_LEN, END_DEC, INSTANCE_TYPE) \
+        vmovdqu HashKey(GDATA_KEY), %xmm13; \
+        vmovdqu OrigIV(GDATA_CTX), %xmm9; \
+        ENCRYPT_SINGLE_BLOCK(GDATA_KEY, %xmm9) \
+        .ifc INSTANCE_TYPE, multi_call; \
+        vmovdqu (GDATA_CTX), %xmm14; \
+        mov PBlockLen(GDATA_CTX), %r12; \
+        cmp $0, %r12; \
+        je partial_done; \
+        GHASH_MUL(%xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6) \
+        vmovdqu %xmm14, (GDATA_CTX); \
+partial_done:; \
+        .endif; \
+        mov AadLen(GDATA_CTX), %r12; \
+        mov InLen(GDATA_CTX), %rax; \
+        shl $3, %r12; \
+        vmovd %r12d, %xmm15; \
+        shl $3, %rax; \
+        vmovq %rax, %xmm1; \
+        vpslldq $8, %xmm15, %xmm15; \
+        vpxor %xmm1, %xmm15, %xmm15; \
+        vpxor %xmm15, %xmm14, %xmm14; \
+        GHASH_MUL(%xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6) \
+        vpshufb SHUF_MASK(%rip), %xmm14, %xmm14; \
+        vpxor %xmm14, %xmm9, %xmm9; \
+1:; \
+        mov AUTH_TAG, %r10; \
+        mov AUTH_TAG_LEN, %r11; \
+        cmp $16, %r11; \
+        je 4f; \
+        cmp $12, %r11; \
+        je 3f; \
+        cmp $8, %r11; \
+        je 2f; \
+        simd_store_avx_15(%r10, %xmm9, %r11, %r12, %rax) \
+        jmp 5f; \
+2:; \
+        vmovq %xmm9, %rax; \
+        mov %rax, (%r10); \
+        jmp 5f; \
+3:; \
+        vmovq %xmm9, %rax; \
+        mov %rax, (%r10); \
+        vpsrldq $8, %xmm9, %xmm9; \
+        vmovd %xmm9, %eax; \
+        mov %eax, 8(%r10); \
+        jmp 5f; \
+4:; \
+        vmovdqu %xmm9, (%r10); \
+5:;	\
 
 .global aes_keyexp_128_enc_vaes_avx512
 
@@ -678,19 +774,23 @@ aes_gcm_precomp_128_vaes_avx512:
 exit_precomp:
 	ret
 
-.global ghash_vaes_avx512
+.global aes_gcm_init_var_iv_128_vaes_avx512
 
-ghash_vaes_avx512:
+aes_gcm_init_var_iv_128_vaes_avx512:
 	FUNC_SAVE()
 
-	CALC_AAD_HASH(%rsi, %rdx, %xmm0, %rdi, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %r10, %r11, %r12, %k1)
+	GCM_INIT(%rdi, %rsi, %rdx, %r8, %r9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %rcx)
 
-        vpshufb SHUF_MASK(%rip), %xmm0, %xmm0
-
-        simd_store_avx(%rcx, %xmm0, %r8, %r12, %rax)
-
-exit_ghash:
+exit_init_IV:
         FUNC_RESTORE()
-
         ret
 
+.global aes_gcm_enc_128_finalize_vaes_avx512
+
+aes_gcm_enc_128_finalize_vaes_avx512:
+	FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, ENC, multi_call)
+        FUNC_RESTORE()
+
+exit_enc_fin:
+        ret
