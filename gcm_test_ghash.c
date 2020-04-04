@@ -40,6 +40,10 @@ extern void aes_gcm_init_var_iv_128_vaes_avx512(struct gcm_key_data *key_data,
 extern void aes_gcm_enc_128_finalize_vaes_avx512(struct gcm_key_data *key_data,
                                      struct gcm_context_data *context_data,
                                      uint8_t *auth_tag, uint64_t auth_tag_len);
+extern void aes_gcm_enc_128_update_vaes_avx512(const struct gcm_key_data *key_data,
+                                   struct gcm_context_data *context_data,
+                                   uint8_t *out, const uint8_t *in,
+                                   uint64_t len);
 
 static uint8_t K12[] = {
         0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c,
@@ -112,6 +116,31 @@ static void aes_gcm_pre_128_vaes_avx512(const void *key, struct gcm_key_data *ke
         aes_gcm_precomp_128_vaes_avx512(key_data);
 }
 
+static int check_data(const uint8_t *test, const uint8_t *expected,
+                      uint64_t len, const char *data_name)
+{
+        int mismatch;
+        int is_error = 0;
+
+        mismatch = memcmp(test, expected, len);
+        if (mismatch) {
+                uint64_t a;
+
+                is_error = 1;
+                printf("  expected results don't match %s \t\t", data_name);
+                for (a = 0; a < len; a++) {
+                        if (test[a] != expected[a]) {
+                                printf(" '%x' != '%x' at %llx of %llx\n",
+                                       test[a], expected[a],
+                                       (unsigned long long) a,
+                                       (unsigned long long) len);
+                                break;
+                        }
+                }
+        }
+        return is_error;
+}
+
 static int test_ghash(void)
 {
         int is_error = 0;
@@ -120,6 +149,8 @@ static int test_ghash(void)
 	struct gcm_context_data ctx;
 	int i;
 	uint8_t *T_test = NULL;
+	uint8_t *ct_test = NULL;
+	uint64_t a;
 
 	T_test = malloc(vector->Tlen);
         if (T_test == NULL) {
@@ -128,34 +159,63 @@ static int test_ghash(void)
                 goto test_gcm_vectors_exit;
         }
 
-	printf("gcm_context_data %lx\n", &ctx); 
+	ct_test = malloc(vector->Plen);
+        if (ct_test == NULL) {
+                fprintf(stderr, "Can't allocate ciphertext memory\n");
+                is_error = 1;
+                goto test_gcm_vectors_exit;
+        }
+
 	aes_gcm_pre_128_vaes_avx512(vector->K, &gdata_key);
 	aes_gcm_init_var_iv_128_vaes_avx512(&gdata_key, &ctx,
 					    vector->IV, vector->IVlen,
 					    vector->A, vector->Alen);
-	aes_gcm_enc_128_finalize_vaes_avx512(&gdata_key, &ctx, T_test, vector->Tlen);
+	printf("After init:\n");
 	for(i = 0; i < 16*48; i++)
                 printf("%x ", gdata_key.ghash_keys.vaes_avx512.shifted_hkey[i]);
 
-	printf("Megha ctx->aad_hash:\n");
-	for(i = 0; i < 16; i++)
+	aes_gcm_enc_128_update_vaes_avx512(&gdata_key, &ctx, ct_test, vector->P, vector->Plen);
+        printf("Megha ctx->aad_hash:\n");
+        for(i = 0; i < 16; i++)
                 printf("%x ", ctx.aad_hash[i]);
         printf("\n");
         printf("Megha ctx->aad_length %lx\n", ctx.aad_length);
         printf("Megha ctx->in_length %lx\n", ctx.in_length);
-	printf("Megha ctx->partial_block_enc_key:\n");
+        printf("Megha ctx->partial_block_enc_key:\n");
         for(i = 0; i < 16; i++)
                 printf("%x ", ctx.partial_block_enc_key[i]);
         printf("\n");
-	printf("Megha ctx->orig_IV:\n");
+        printf("Megha ctx->orig_IV:\n");
         for(i = 0; i < 16; i++)
                 printf("%x ", ctx.orig_IV[i]);
         printf("\n");
-	printf("Megha ctx->current_counter:\n");
+        printf("Megha ctx->current_counter:\n");
         for(i = 0; i < 16; i++)
                 printf("%x ", ctx.current_counter[i]);
         printf("\n");
         printf("Megha ctx->partial_block_length %lx\n", ctx.partial_block_length);
+	printf("Megha cipher text:\n");
+        for (a = 0; a < vector->Plen; a++)
+                printf("%x ", ct_test[a]);
+        printf("\nCorrect cipher text:\n");
+        for (a = 0; a < vector->Plen; a++)
+                printf("%x ", vector->C[a]);
+        printf("\n");
+
+	aes_gcm_enc_128_finalize_vaes_avx512(&gdata_key, &ctx, T_test, vector->Tlen);
+	printf("After finalise:\n");
+        printf("Megha tag:\n");
+        for (a = 0; a < vector->Tlen; a++)
+                printf("%x ", T_test[a]);
+        printf("\nCorrect tag:\n");
+        for (a = 0; a < vector->Tlen; a++)
+                printf("%x ", vector->T[a]);
+
+	
+//	is_error |= check_data(T_test, vector->T, vector->Tlen,
+  //                                     "generated tag (T)");
+//	is_error |= check_data(ct_test, vector->C, vector->Plen,
+  //                             "encrypted cypher text (C)");
 test_gcm_vectors_exit:
         return is_error;
 }
