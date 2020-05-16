@@ -28,6 +28,10 @@ ZERO:            .octa     0x00000000000000000000000000000000
 ONE:
 .octa   0x00000000000000000000000000000001
 
+.align 16
+ONEf:
+.octa   0x01000000000000000000000000000000
+
 .align 64
 ddq_add_1234:
 .octa   0x00000000000000000000000000000001
@@ -285,10 +289,6 @@ mask_out_top_block:
 #define zmm12x xmm12
 #define zmm6x xmm6
 
-#define meg(reg,y)      reg##y
-#define meg3(reg,y)     meg(reg,y)
-#define meg2(reg,y)     meg3(reg,y)
-#define meg1(reg,y)     meg2(reg,y)
 #define str(reg,y)	reg##y
 #define str2(reg,y)	str(reg,y)
 #define str1(reg,y)	str2(reg,y)
@@ -298,6 +298,19 @@ mask_out_top_block:
 #define DWORD(reg)	str1(reg, d)
 #define WORD(reg)	str1(reg, w)
 #define BYTE(reg)	str1(reg, b)
+
+#define STACK_OFFSET    0
+#define arg1 %rdi
+#define arg2 %rsi
+#define arg3 %rdx
+#define arg4 %rcx
+#define arg5 %r8
+#define arg6 %r9
+#define arg7 STACK_OFFSET+8*1(%r14)
+#define arg8 STACK_OFFSET+8*2(%r14)
+#define arg9 STACK_OFFSET+8*3(%r14)
+#define arg10 STACK_OFFSET+8*4(%r14)
+#define arg11 STACK_OFFSET+8*5(%r14)
 
 #define FUNC_SAVE()                                     \
         mov     %rsp, %rax;                             \
@@ -330,8 +343,48 @@ mask_out_top_block:
         vpxor   %xmm3, %xmm1, %xmm1;			\
         vpxor   %xmm2, %xmm1, %xmm1;			
 
-#define ENCRYPT_SINGLE_BLOCK(GDATA, XMM0)       \
+#define key_expansion_1_192_avx(PARAM)                  \
+        vpshufd $0xff, %xmm2, %xmm2;                    \
+        vshufps $0x10, %xmm1, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm1, %xmm1;                    \
+        vshufps $0x8c, %xmm1, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm1, %xmm1;                    \
+        vpxor   %xmm2, %xmm1, %xmm1;                    \
+        vmovdqu %xmm1, PARAM(EXP_ENC_KEYS);
+
+#define key_expansion_2_192_avx(PARAM)                  \
+        vmovdqa %xmm4, %xmm5;                   \
+        vpslldq $4, %xmm5, %xmm5;               \
+        vshufps $0xf0, %xmm1, %xmm6, %xmm6;     \
+        vpxor %xmm5, %xmm6, %xmm6;              \
+        vpxor %xmm6, %xmm4, %xmm4;              \
+        vpshufd $0xe, %xmm4, %xmm7;             \
+        vmovdqu %xmm7, PARAM(EXP_ENC_KEYS);
+
+#define key_expansion_256_avx			\
+	vpshufd $0xff, %xmm2, %xmm2;                    \
+        vshufps $0x10, %xmm1, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm1, %xmm1;                    \
+        vshufps $0x8c, %xmm1, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm1, %xmm1;                    \
+        vpxor   %xmm2, %xmm1, %xmm1;
+
+#define key_expansion_256_avx_2                   \
+	vpshufd $0xaa, %xmm2, %xmm2;                    \
+        vshufps $0x10, %xmm4, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm4, %xmm4;                    \
+        vshufps $0x8c, %xmm4, %xmm3, %xmm3;             \
+        vpxor   %xmm3, %xmm4, %xmm4;                    \
+        vpxor   %xmm2, %xmm4, %xmm4;
+
+#define key_dec_192_avx(PARAM)                          \
+        vmovdqa 16*PARAM(EXP_ENC_KEYS), %xmm0;          \
+        vaesimc %xmm0, %xmm1;                           \
+        vmovdqa %xmm1, 16*(12-PARAM)(EXP_DEC_KEYS);     \
+
+#define ENCRYPT_SINGLE_BLOCK(GDATA, XMM0, NROUNDS)       \
         vpxorq (GDATA), XMM0, XMM0;             \
+.if NROUNDS == 9;	\
         vaesenc 16*1(GDATA), XMM0, XMM0;        \
         vaesenc 16*2(GDATA), XMM0, XMM0;        \
         vaesenc 16*3(GDATA), XMM0, XMM0;        \
@@ -342,6 +395,35 @@ mask_out_top_block:
         vaesenc 16*8(GDATA), XMM0, XMM0;        \
         vaesenc 16*9(GDATA), XMM0, XMM0;        \
         vaesenclast 16*10(GDATA), XMM0, XMM0;   \
+.elseif NROUNDS == 11; \
+	vaesenc 16*1(GDATA), XMM0, XMM0;        \
+        vaesenc 16*2(GDATA), XMM0, XMM0;        \
+        vaesenc 16*3(GDATA), XMM0, XMM0;        \
+        vaesenc 16*4(GDATA), XMM0, XMM0;        \
+        vaesenc 16*5(GDATA), XMM0, XMM0;        \
+        vaesenc 16*6(GDATA), XMM0, XMM0;        \
+        vaesenc 16*7(GDATA), XMM0, XMM0;        \
+        vaesenc 16*8(GDATA), XMM0, XMM0;        \
+        vaesenc 16*9(GDATA), XMM0, XMM0;        \
+	vaesenc 16*10(GDATA), XMM0, XMM0;        \
+        vaesenc 16*11(GDATA), XMM0, XMM0;        \
+        vaesenclast 16*12(GDATA), XMM0, XMM0;   \
+.elseif NROUNDS == 13; \
+	vaesenc 16*1(GDATA), XMM0, XMM0;        \
+        vaesenc 16*2(GDATA), XMM0, XMM0;        \
+        vaesenc 16*3(GDATA), XMM0, XMM0;        \
+        vaesenc 16*4(GDATA), XMM0, XMM0;        \
+        vaesenc 16*5(GDATA), XMM0, XMM0;        \
+        vaesenc 16*6(GDATA), XMM0, XMM0;        \
+        vaesenc 16*7(GDATA), XMM0, XMM0;        \
+        vaesenc 16*8(GDATA), XMM0, XMM0;        \
+        vaesenc 16*9(GDATA), XMM0, XMM0;        \
+        vaesenc 16*10(GDATA), XMM0, XMM0;        \
+        vaesenc 16*11(GDATA), XMM0, XMM0;        \
+	vaesenc 16*12(GDATA), XMM0, XMM0;        \
+        vaesenc 16*13(GDATA), XMM0, XMM0;        \
+        vaesenclast 16*14(GDATA), XMM0, XMM0;   \
+.endif;	\
 
 #define GHASH_MUL(GH, HK, T1, T2, T3, T4, T5)                   \
         vpclmulqdq      $0x11, HK, GH, T1;                      \
@@ -462,30 +544,29 @@ mask_out_top_block:
 
 #define simd_store_avx_15(DST, SRC, SIZE, TMP, IDX)	\
 	xor IDX, IDX;		\
-lt16:;	\
 	test	$8, SIZE;       \
-	jz      lt8;           	\
+	jz      4f;           	\
 	vmovq	SRC, (DST, IDX, 1);	\
 	vpsrldq	$8, SRC, SRC;	\
 	add	$8, IDX;	\
-lt8:;	\
+4:;	\
 	vmovq 	SRC, TMP;	\
 	test	$4, SIZE;       \
-        jz      lt4;            \
+        jz      3f;            \
 	mov	DWORD(TMP), (DST, IDX, 1);	\
 	shr	$32, TMP;	\
 	add	$4, IDX;	\
-lt4:;	\
+3:;	\
 	test	$2, SIZE;       \
-        jz      lt2;            \
+        jz      2f;            \
         mov     WORD(TMP), (DST, IDX, 1);   \
         shr     $16, TMP;       \
         add     $2, IDX;        \
-lt2:;\
+2:;	\
 	test	$1, SIZE;          \
-	jz end;	\
+	jz	1f;	\
 	mov	BYTE(TMP), (DST, IDX, 1);	\
-end:;
+1:;
 
 #define VCLMUL_STEP1_6(KP, HI, TMP, TH, TM, TL) \
         vmovdqu64       HashKey_4(KP) , TMP;            \
@@ -619,9 +700,9 @@ end:;
         vpxorq          AAD_HASH, AAD_HASH, AAD_HASH;   \
         vmovdqa64       SHUF_MASK(%rip), SHFMSK;        \
         vmovdqa64       POLY2(%rip), POLY;              \
-13:;                                      \
+11:;                                      \
         cmp             $128, T2;                       \
-        jl              14f;              \
+        jl              12f;              \
         vmovdqu64       64*0(T1), ZT2;                  \
         vmovdqu64       64*1(T1), ZT1;                  \
         vpshufb         SHFMSK, ZT2, ZT2;               \
@@ -633,13 +714,13 @@ end:;
         VCLMUL_REDUCE(AAD_HASH, XWORD(POLY), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))    \
         \
         sub             $128, T2;                       \
-        je              12f;                 \
+        je              10f;                 \
         add             $128, T1;                       \
-        jmp             13b;               \
+        jmp             11b;               \
         \
-14:;                             \
+12:;                             \
         or              T2, T2;                 \
-        jz              12f;         \
+        jz              10f;         \
         lea             byte64_len_to_mask_table(%rip), T3;             \
         lea             (T3, T2, 8), T3;        \
         add             $15, T2;                \
@@ -670,7 +751,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 8)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 8)  \
-        jmp             11f;               \
+        jmp             9f;               \
 7:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
@@ -681,7 +762,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 7)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 7)  \
-        jmp             11f;               \
+        jmp             9f;               \
 6:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
@@ -692,7 +773,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 6)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 6)  \
-        jmp             11f;               \
+        jmp             9f;               \
 5:;                                         \
         sub             $512, T3;                       \
         kmovq           (T3), MASKREG;                  \
@@ -703,7 +784,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 5)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 5)  \
-        jmp             11f;               \
+        jmp             9f;               \
 4:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2{MASKREG}{z};          \
@@ -711,7 +792,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 4)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 4)  \
-        jmp             11f;               \
+        jmp             9f;               \
 3:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), ZT2{MASKREG}{z};          \
@@ -719,7 +800,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 3)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 3)  \
-        jmp             11f;               \
+        jmp             9f;               \
 2:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), YWORD(ZT2){MASKREG}{z};          \
@@ -727,7 +808,7 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 2)    \
 	VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 2)  \
-        jmp             11f;               \
+        jmp             9f;               \
 1:;                                         \
         kmovq           (T3), MASKREG;                  \
         vmovdqu8        (T1), XWORD(ZT2){MASKREG}{z};          \
@@ -735,9 +816,9 @@ end:;
         vpxorq          ZWORD(AAD_HASH), ZT2, ZT2;      \
         VCLMUL_1_TO_8_STEP1(GDATA_KEY, ZT1, ZT0, ZT3, TH, TM, TL, 1)    \
         VCLMUL_1_TO_8_STEP2(GDATA_KEY, ZT1, ZT2, ZT0, ZT3, ZT4, TH, TM, TL, 1)  \
-11:;                                      \
+9:;                                      \
         VCLMUL_REDUCE(AAD_HASH, XWORD(POLY), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))    \
-12:;
+10:;
 
 #define CALC_J0(KEY, IV, IV_LEN, J0, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, T1, T2, T3, MASKREG)       \
         CALC_AAD_HASH(IV, IV_LEN, J0, KEY, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, T1, T2, T3, MASKREG)       \
@@ -750,31 +831,39 @@ end:;
         VCLMUL_REDUCE(J0, XWORD(ZT8), XWORD(ZT1), XWORD(ZT2), XWORD(ZT0), XWORD(ZT3))  \
         vpshufb         SHUF_MASK(%rip), J0, J0;
 
-#define GCM_INIT(GDATA_KEY, GDATA_CTX, IV, A_IN, A_LEN, GPR1, GPR2, GPR3, MASKREG, AAD_HASH, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, IV_LEN)    \
-        CALC_AAD_HASH(A_IN, A_LEN, AAD_HASH, GDATA_KEY, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)    \
+#define GCM_INIT(GDATA_KEY, GDATA_CTX, IV, A_IN, A_LEN, GPR1, GPR2, GPR3, MASKREG, AAD_HASH, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, IV_LEN, NUM_PARAMS)    \
+	CALC_AAD_HASH(A_IN, A_LEN, AAD_HASH, GDATA_KEY, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)    \
         mov             A_LEN, GPR1;                    \
         vmovdqu64       AAD_HASH, (GDATA_CTX);          \
-        mov             GPR1, 16(GDATA_CTX);        \
+        mov             GPR1, AadLen(GDATA_CTX);        \
         xor             GPR1, GPR1;                     \
         mov             GPR1, InLen(GDATA_CTX);         \
         mov             GPR1, PBlockLen(GDATA_CTX);     \
-	CALC_J0(GDATA_KEY, IV, IV_LEN, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)  \
+        .if NUM_PARAMS == 22;   \
+        CALC_J0(GDATA_KEY, IV, IV_LEN, CUR_COUNT, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, GPR1, GPR2, GPR3, MASKREG)  \
+        .else;  \
+        vmovdqu8        ONEf(%rip), CUR_COUNT;          \
+        mov             IV, GPR2;                       \
+        mov             $0xfff, GPR1;                   \
+        kmovq           GPR1, MASKREG;                  \
+        vmovdqu8        (GPR2), CUR_COUNT{MASKREG};     \
+        .endif; \
         vmovdqu64       CUR_COUNT, OrigIV(GDATA_CTX);   \
         vpshufb         SHUF_MASK(%rip), CUR_COUNT, CUR_COUNT;     \
         vmovdqu         CUR_COUNT, CurCount(GDATA_CTX);
 
-#define GCM_COMPLETE(GDATA_KEY, GDATA_CTX, AUTH_TAG, AUTH_TAG_LEN, END_DEC, INSTANCE_TYPE) \
+#define GCM_COMPLETE(GDATA_KEY, GDATA_CTX, AUTH_TAG, AUTH_TAG_LEN, END_DEC, INSTANCE_TYPE, NROUNDS) \
         vmovdqu HashKey(GDATA_KEY), %xmm13; \
         vmovdqu OrigIV(GDATA_CTX), %xmm9; \
-        ENCRYPT_SINGLE_BLOCK(GDATA_KEY, %xmm9) \
+        ENCRYPT_SINGLE_BLOCK(GDATA_KEY, %xmm9, NROUNDS) \
         .ifc INSTANCE_TYPE, multi_call; \
         vmovdqu (GDATA_CTX), %xmm14; \
         mov PBlockLen(GDATA_CTX), %r12; \
         cmp $0, %r12; \
-        je partial_done; \
+        je 36f; \
         GHASH_MUL(%xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6) \
         vmovdqu %xmm14, (GDATA_CTX); \
-partial_done:; \
+36:; \
         .endif; \
         mov AadLen(GDATA_CTX), %r12; \
         mov InLen(GDATA_CTX), %rax; \
@@ -788,49 +877,49 @@ partial_done:; \
         GHASH_MUL(%xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6) \
         vpshufb SHUF_MASK(%rip), %xmm14, %xmm14; \
         vpxor %xmm14, %xmm9, %xmm9; \
-1:; \
+31:; \
         mov AUTH_TAG, %r10; \
         mov AUTH_TAG_LEN, %r11; \
         cmp $16, %r11; \
-        je 4f; \
+        je 34f; \
         cmp $12, %r11; \
-        je 3f; \
+        je 33f; \
         cmp $8, %r11; \
-        je 2f; \
+        je 32f; \
         simd_store_avx_15(%r10, %xmm9, %r11, %r12, %rax) \
-        jmp 5f; \
-2:; \
+        jmp 35f; \
+32:; \
         vmovq %xmm9, %rax; \
         mov %rax, (%r10); \
-        jmp 5f; \
-3:; \
+        jmp 35f; \
+33:; \
         vmovq %xmm9, %rax; \
         mov %rax, (%r10); \
         vpsrldq $8, %xmm9, %xmm9; \
         vmovd %xmm9, %eax; \
         mov %eax, 8(%r10); \
-        jmp 5f; \
-4:; \
+        jmp 35f; \
+34:; \
         vmovdqu %xmm9, (%r10); \
-5:;	\
+35:;	\
 
 #define READ_SMALL_DATA_INPUT(OUTPUT, INPUT, LENGTH ,TMP1, MASK)        \
         cmp             $16, LENGTH;                            \
-        jge             _read_small_data_ge16;                  \
+        jge             1f;                  \
         lea             byte_len_to_mask_table(%rip), TMP1;                           \
         kmovw           (TMP1, LENGTH, 2), MASK;                \
         vmovdqu8        (INPUT), OUTPUT{MASK}{z};               \
-        jmp             _read_small_data_end;                   \
-_read_small_data_ge16:;                                         \
+        jmp             2f;                   \
+1:;                                         \
         vmovdqu8        (INPUT), OUTPUT;                        \
         mov             $0xffff, TMP1;                          \
         kmovq           TMP1, MASK;                             \
-_read_small_data_end:;
+2:;
 
 #define PARTIAL_BLOCK(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, DATA_OFFSET, AAD_HASH, ENC_DEC, GPTMP0, GPTMP1, GPTMP2, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, MASKREG)               \
         mov             PBlockLen(GDATA_CTX), GPTMP0;   \
         or              GPTMP0, GPTMP0;                 \
-        je              _partial_block_done;            \
+        je              4f;            \
         READ_SMALL_DATA_INPUT(XWORD(ZTMP0), PLAIN_CYPH_IN, PLAIN_CYPH_LEN, GPTMP1, MASKREG)        \
         vmovdqu64       PBlockEncKey(GDATA_CTX), XWORD(ZTMP1);  \
         vmovdqu64       HashKey(GDATA_KEY), XWORD(ZTMP2);       \
@@ -845,9 +934,9 @@ _read_small_data_end:;
         mov             PLAIN_CYPH_LEN, GPTMP2;                 \
         add             GPTMP0, GPTMP2;                         \
         sub             $16, GPTMP2;                            \
-        jge             _no_extra_mask;                         \
+        jge             1f;                         \
         sub             GPTMP2, GPTMP1;                         \
-_no_extra_mask:;                                                \
+1:;                                                \
         vmovdqu64       (ALL_F - SHIFT_MASK)(GPTMP1), XWORD(ZTMP0);       \
         vpand           XWORD(ZTMP0), XWORD(ZTMP1),  XWORD(ZTMP1);              \
         .ifc ENC_DEC, DEC;                                      \
@@ -861,18 +950,18 @@ _no_extra_mask:;                                                \
         vpxorq          XWORD(ZTMP1), AAD_HASH, AAD_HASH;               \
         .endif; \
         cmp             $0, GPTMP2;                     \
-        jl              _partial_incomplete;            \
+        jl              2f;            \
         \
         GHASH_MUL(AAD_HASH, XWORD(ZTMP2), XWORD(ZTMP5), XWORD(ZTMP6), XWORD(ZTMP7), XWORD(ZTMP8), XWORD(ZTMP9)) \
 	movq		$0, PBlockLen(GDATA_CTX);	\
         mov             GPTMP0, GPTMP1; \
         mov             $16, GPTMP0;    \
         sub             GPTMP1, GPTMP0; \
-        jmp             _enc_dec_done;  \
-_partial_incomplete:;   \
+        jmp             3f;  \
+2:;   \
         add             PLAIN_CYPH_LEN, PBlockLen(GDATA_CTX);   \
         mov             PLAIN_CYPH_LEN, GPTMP0;                 \
-_enc_dec_done:;         \
+3:;         \
         lea             byte_len_to_mask_table(%rip), GPTMP1;                         \
         kmovw           (GPTMP1, GPTMP0, 2), MASKREG;           \
         vmovdqu64       AAD_HASH, (GDATA_CTX);          \
@@ -882,9 +971,9 @@ _enc_dec_done:;         \
         .endif;                 \
         vmovdqu8        XWORD(ZTMP1), (CYPH_PLAIN_OUT, DATA_OFFSET, 1){MASKREG};        \
         add             GPTMP0, DATA_OFFSET;    \
-_partial_block_done:;
+4:;
 
-#define INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, BLK_OFFSET, DATA_DISPL) \
+#define INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, BLK_OFFSET, DATA_DISPL, NROUNDS) \
         cmp             $(256 - 16), BYTE(CTR_CHECK); \
         jae             1f; \
         vpaddd          ADDBE_1234 ,CTR, T5; \
@@ -915,6 +1004,7 @@ _partial_block_done:;
         vpxorq          T4, T6, T6; \
         vpxorq          T4, T7, T7; \
         vpxorq          T4, T8, T8; \
+.if NROUNDS==9;	\
         vbroadcastf64x2 16*1(KP), T4; \
         vaesenc         T4, T5, T5; \
         vaesenc         T4, T6, T6; \
@@ -961,6 +1051,131 @@ _partial_block_done:;
         vaesenc         T4, T7, T7; \
         vaesenc         T4, T8, T8; \
         vbroadcastf64x2 16*10(KP), T4; \
+.elseif NROUNDS == 11; \
+        vbroadcastf64x2 16*1(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*2(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*3(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*4(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*5(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*6(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*7(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*8(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*9(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+	vbroadcastf64x2 16*10(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*11(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*12(KP), T4; \
+.elseif NROUNDS == 13; \
+        vbroadcastf64x2 16*1(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*2(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*3(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*4(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*5(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*6(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*7(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*8(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*9(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+	vbroadcastf64x2 16*10(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*11(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*12(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*13(KP), T4; \
+        vaesenc         T4, T5, T5; \
+        vaesenc         T4, T6, T6; \
+        vaesenc         T4, T7, T7; \
+        vaesenc         T4, T8, T8; \
+        vbroadcastf64x2 16*14(KP), T4; \
+.endif;	\
         vaesenclast     T4, T5, T5; \
         vaesenclast     T4, T6, T6; \
         vaesenclast     T4, T7, T7; \
@@ -974,10 +1189,10 @@ _partial_block_done:;
         vmovdqu8        T7, 128 + DATA_DISPL(DATA_OFFSET, OUT); \
         vmovdqu8        T8, 192 + DATA_DISPL(DATA_OFFSET, OUT); \
 .ifc  ENC_DEC, DEC; \
-        vpshufb         SHUF_MASK, T5, T0; \
-        vpshufb         SHUF_MASK, T6, T1; \
-        vpshufb         SHUF_MASK, T7, T2; \
-        vpshufb         SHUF_MASK, T8, T3; \
+        vpshufb         SHUF_MASK, T0, T5; \
+        vpshufb         SHUF_MASK, T1, T6; \
+        vpshufb         SHUF_MASK, T2, T7; \
+        vpshufb         SHUF_MASK, T3, T8; \
 .else; \
         vpshufb         SHUF_MASK, T5, T5; \
         vpshufb         SHUF_MASK, T6, T6; \
@@ -992,7 +1207,7 @@ _partial_block_done:;
         vmovdqa64       T7, 128 + BLK_OFFSET(%rsp); \
         vmovdqa64       T8, 192 + BLK_OFFSET(%rsp);
 
-#define GHASH_16_ENCRYPT_16_PARALLEL(GDATA, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HASHKEY_OFFSET, AESOUT_BLK_OFFSET, GHASHIN_BLK_OFFSET, SHFMSK, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ZT23, ADDBE_4x4, ADDBE_1234, TO_REDUCE_L, TO_REDUCE_H, TO_REDUCE_M, DO_REDUCTION, ENC_DEC, DATA_DISPL, GHASH_IN)   \
+#define GHASH_16_ENCRYPT_16_PARALLEL(GDATA, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HASHKEY_OFFSET, AESOUT_BLK_OFFSET, GHASHIN_BLK_OFFSET, SHFMSK, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ZT23, ADDBE_4x4, ADDBE_1234, TO_REDUCE_L, TO_REDUCE_H, TO_REDUCE_M, DO_REDUCTION, ENC_DEC, DATA_DISPL, GHASH_IN, NROUNDS)   \
         cmp             $240, BYTE(CTR_CHECK);          \
         jae             1f;          \
 	vpaddd          ADDBE_1234, CTR_BE, ZT1;        \
@@ -1198,21 +1413,21 @@ _partial_block_done:;
         .ifc DO_REDUCTION, final_reduction;     \
         .endif;
 
-#define INITIAL_BLOCKS_Nx16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, GH, GL, GM, ADDBE_4x4, ADDBE_1234, SHUF_MASK, ENC_DEC, NBLOCKS, DEPTH_BLK) \
+#define INITIAL_BLOCKS_Nx16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, GH, GL, GM, ADDBE_4x4, ADDBE_1234, SHUF_MASK, ENC_DEC, NBLOCKS, DEPTH_BLKi, NROUNDS) \
         vmovd           XWORD(CTR), DWORD(CTR_CHECK); \
         and             $255, DWORD(CTR_CHECK); \
         vshufi64x2      $0, CTR, CTR, CTR; \
         vpshufb         SHUF_MASK, CTR, CTR; \
-        INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, STACK_LOCAL_OFFSET, 0) \
-	INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, no_ghash, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, STACK_LOCAL_OFFSET + 256, 256) \
-	GHASH_16_ENCRYPT_16_PARALLEL(KP, OUT, IN, DATA_OFFSET, CTR, CTR_CHECK, HashKey_48, STACK_LOCAL_OFFSET + 512, STACK_LOCAL_OFFSET, SHUF_MASK, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, ADDBE_4x4, ADDBE_1234, GL, GH, GM, first_time, ENC_DEC, 512, no_ghash_in) \
+        INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, GHASH, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, STACK_LOCAL_OFFSET, 0, NROUNDS) \
+	INITIAL_BLOCKS_16(IN, OUT, KP, DATA_OFFSET, no_ghash, CTR, CTR_CHECK, ADDBE_4x4, ADDBE_1234, T0, T1, T2, T3, T4, T5, T6, T7, T8, SHUF_MASK, ENC_DEC, STACK_LOCAL_OFFSET + 256, 256, NROUNDS) \
+	GHASH_16_ENCRYPT_16_PARALLEL(KP, OUT, IN, DATA_OFFSET, CTR, CTR_CHECK, HashKey_48, STACK_LOCAL_OFFSET + 512, STACK_LOCAL_OFFSET, SHUF_MASK, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, ADDBE_4x4, ADDBE_1234, GL, GH, GM, first_time, ENC_DEC, 512, no_ghash_in, NROUNDS) \
 	add             $(48 * 16), DATA_OFFSET;
 
-#define GHASH_ENCRYPT_Nx16_PARALLEL(IN, OUT, GDATA_KEY, DATA_OFFSET, CTR_BE, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, GTH, GTL, GTM, ADDBE_4x4, ADDBE_1234, GHASH, ENC_DEC, NUM_BLOCKS, DEPTH_BLK, CTR_CHECK)    \
-	GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_32, STACK_LOCAL_OFFSET, STACK_LOCAL_OFFSET + (16 * 16), SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, no_reduction, ENC, 0, no_ghash_in)       \
-        GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_32 + 256, STACK_LOCAL_OFFSET + 256, STACK_LOCAL_OFFSET + (16 * 16) + 256, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, final_reduction, ENC, 256, no_ghash_in)       \
+#define GHASH_ENCRYPT_Nx16_PARALLEL(IN, OUT, GDATA_KEY, DATA_OFFSET, CTR_BE, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, GTH, GTL, GTM, ADDBE_4x4, ADDBE_1234, GHASH, ENC_DEC, NUM_BLOCKS, DEPTH_BLK, CTR_CHECK, NROUNDS)    \
+	GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_32, STACK_LOCAL_OFFSET, STACK_LOCAL_OFFSET + (16 * 16), SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, no_reduction, ENC, 0, no_ghash_in, NROUNDS)       \
+        GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_32 + 256, STACK_LOCAL_OFFSET + 256, STACK_LOCAL_OFFSET + (16 * 16) + 256, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, final_reduction, ENC, 256, no_ghash_in, NROUNDS)       \
         vmovdqa64       ZT4, GHASH;             \
-        GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_48, STACK_LOCAL_OFFSET + 512, STACK_LOCAL_OFFSET, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, first_time, ENC, 512, GHASH)  \
+        GHASH_16_ENCRYPT_16_PARALLEL(GDATA_KEY, OUT, IN, DATA_OFFSET, CTR_BE, CTR_CHECK, HashKey_48, STACK_LOCAL_OFFSET + 512, STACK_LOCAL_OFFSET, SHFMSK, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, ADDBE_4x4, ADDBE_1234, GTL, GTH, GTM, first_time, ENC, 512, GHASH, NROUNDS)  \
         add     $(NUM_BLOCKS * 16), DATA_OFFSET;        \
 
 #define GHASH_LAST_Nx16(KP, GHASH, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, GH, GL,GM, LOOP_BLK, DEPTH_BLK)       \
@@ -1929,7 +2144,7 @@ VHPXORI4x128(T2, T8); \
 vmovdqa64       POLY2(%rip), XWORD(T9); \
 VCLMUL_REDUCE(XWORD(GHASH), XWORD(T9), XWORD(T1), XWORD(T2), XWORD(T3), XWORD(T4));
 		
-#define INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, num_initial_blocks, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
+#define INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, num_initial_blocks, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZT0, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, ZT21, ZT22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
 .ifnc GH, no_zmm; \
 .ifnc GL, no_zmm; \
 .ifnc GM, no_zmm; \
@@ -1977,6 +2192,7 @@ VCLMUL_REDUCE(XWORD(GHASH), XWORD(T9), XWORD(T1), XWORD(T2), XWORD(T3), XWORD(T4
 .endif; \
 ZMM_OPCODE3_DSTR_SRC1R_SRC2R_BLOCKS_0_16(num_initial_blocks, vpshufb, ZT3, ZT4, ZT8, ZT9, ZT3, ZT4, ZT8, ZT9, SHUFMASK, SHUFMASK, SHUFMASK, SHUFMASK) \
 ZMM_LOAD_MASKED_BLOCKS_0_16(num_initial_blocks, PLAIN_CYPH_IN, DATA_OFFSET, ZT5, ZT6, ZT10, ZT11, MASKREG) \
+.if NROUNDS ==9;	\
 vbroadcastf64x2 (GDATA_KEY), ZT1; \
 ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 0, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
 vbroadcastf64x2 16*1(GDATA_KEY), ZT1; \
@@ -1999,6 +2215,65 @@ vbroadcastf64x2 16*9(GDATA_KEY), ZT1; \
 ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 9, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
 vbroadcastf64x2 16*10(GDATA_KEY), ZT1; \
 ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 10, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+.elseif NROUNDS == 11;	\
+vbroadcastf64x2 (GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 0, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*1(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 1, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*2(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 2, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*3(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 3, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*4(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 4, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*5(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 5, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*6(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 6, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*7(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 7, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*8(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 8, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*9(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 9, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*10(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 10, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*11(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 11, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*12(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 12, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+.elseif NROUNDS == 13;	\
+vbroadcastf64x2 (GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 0, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*1(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 1, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*2(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 2, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*3(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 3, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*4(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 4, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*5(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 5, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*6(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 6, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*7(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 7, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*8(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 8, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*9(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 9, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*10(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 10, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*11(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 11, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*12(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 12, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*13(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 13, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+vbroadcastf64x2 16*14(GDATA_KEY), ZT1; \
+ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, ZT8, ZT9, ZT1, 14, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, NROUNDS) \
+.endif;	\
 .if num_initial_blocks <= 4; \
         vextracti32x4   $(num_initial_blocks - 1), ZT3, XWORD(ZT1); \
 .elseif num_initial_blocks <= 8; \
@@ -2054,28 +2329,53 @@ ZMM_STORE_MASKED_BLOCKS_0_16(num_initial_blocks, CYPH_PLAIN_OUT,DATA_OFFSET, ZT3
 1:;	\
 	mov     LENGTH, PBlockLen(GDATA_CTX); \
 	vmovdqu64       XWORD(ZT1), PBlockEncKey(GDATA_CTX); \
-.if num_initial_blocks > 1; \
-	GHASH_1_TO_16(GDATA_KEY, HASH_IN_OUT, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, GH, GL, GM, ZT2, ZT5, ZT6, ZT10, ZT11, num_initial_blocks - 1, 0) \
+.ifc INSTANCE_TYPE, multi_call;	\
+	.if num_initial_blocks > 1; \
+		GHASH_1_TO_16(GDATA_KEY, HASH_IN_OUT, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, GH, GL, GM, ZT2, ZT5, ZT6, ZT10, ZT11, num_initial_blocks - 1, 0) \
+	.else;	\
+		.ifc GH, no_zmm; \
+		.ifc GL, no_zmm; \
+        	.ifc GM, no_zmm; \
+			vpxorq          XWORD(ZT7), XWORD(ZT2), HASH_IN_OUT; \
+		.else;		\
+			vpsrldq         $8, GM, ZT12; \
+	        	vpslldq         $8, GM, ZT13; \
+	        	vpxorq          ZT12, GH, GH; \
+			vpxorq          ZT13, GL, GL; \
+	        	VHPXORI4x128(GH, ZT12) \
+		        VHPXORI4x128(GL, ZT13) \
+		        vmovdqa64       POLY2(%rip), XWORD(ZT12); \
+	        	VCLMUL_REDUCE(HASH_IN_OUT, XWORD(ZT12), XWORD(GH), XWORD(GL), XWORD(ZT13), XWORD(ZT14)) \
+		        vpxorq          XWORD(ZT7), HASH_IN_OUT, HASH_IN_OUT; \
+		.endif; \
+		.endif; \
+		.endif; \
+		jmp             3f; \
+	.endif;	\
 .else;	\
-	.ifc GH, no_zmm; \
-	.ifc GL, no_zmm; \
-        .ifc GM, no_zmm; \
-		vpxorq          XWORD(ZT7), XWORD(ZT2), HASH_IN_OUT; \
-	.else;		\
-		vpsrldq         $8, GM, ZT12; \
-	        vpslldq         $8, GM, ZT13; \
-        	vpxorq          ZT12, GH, GH; \
-		vpxorq          ZT13, GL, GL; \
-	        VHPXORI4x128(GH, ZT12) \
-	        VHPXORI4x128(GL, ZT13) \
-	        vmovdqa64       POLY2(%rip), XWORD(ZT12); \
-	        VCLMUL_REDUCE(HASH_IN_OUT, XWORD(ZT12), XWORD(GH), XWORD(GL), XWORD(ZT13), XWORD(ZT14)) \
-	        vpxorq          XWORD(ZT7), HASH_IN_OUT, HASH_IN_OUT; \
-	.endif; \
-	.endif; \
-	.endif; \
-	jmp             3f; \
-.endif;	\
+	.if num_initial_blocks > 0; \
+                GHASH_1_TO_16(GDATA_KEY, HASH_IN_OUT, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, ZT18, ZT19, ZT20, GH, GL, GM, ZT2, ZT5, ZT6, ZT10, ZT11, num_initial_blocks, 1) \
+	.else;	\
+		.ifc GH, no_zmm; \
+                .ifc GL, no_zmm; \
+                .ifc GM, no_zmm; \
+                        vpxorq          XWORD(ZT7), XWORD(ZT2), HASH_IN_OUT; \
+                .else;          \
+                        vpsrldq         $8, GM, ZT12; \
+                        vpslldq         $8, GM, ZT13; \
+                        vpxorq          ZT12, GH, GH; \
+                        vpxorq          ZT13, GL, GL; \
+                        VHPXORI4x128(GH, ZT12) \
+                        VHPXORI4x128(GL, ZT13) \
+                        vmovdqa64       POLY2(%rip), XWORD(ZT12); \
+                        VCLMUL_REDUCE(HASH_IN_OUT, XWORD(ZT12), XWORD(GH), XWORD(GL), XWORD(ZT13), XWORD(ZT14)) \
+                        vpxorq          XWORD(ZT7), HASH_IN_OUT, HASH_IN_OUT; \
+                .endif; \
+                .endif; \
+                .endif; \
+		jmp             3f; \
+	.endif;	\
+.endif; \
 2:;	\
     .ifc INSTANCE_TYPE, multi_call; \
     .if num_initial_blocks > 1; \
@@ -2088,13 +2388,13 @@ ZMM_STORE_MASKED_BLOCKS_0_16(num_initial_blocks, CYPH_PLAIN_OUT,DATA_OFFSET, ZT3
     .endif; \
 3:;	\
 
-#define  GCM_ENC_DEC_SMALL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC_DEC, DATA_OFFSET, LENGTH, NUM_BLOCKS, CTR, HASH_IN_OUT, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
+#define  GCM_ENC_DEC_SMALL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC_DEC, DATA_OFFSET, LENGTH, NUM_BLOCKS, CTR, HASH_IN_OUT, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
         cmp     $8, NUM_BLOCKS; \
         je      8f; \
-        jl      _small_initial_num_blocks_is_7_1; \
+        jl      18f; \
         cmp     $12, NUM_BLOCKS; \
         je      12f; \
-        jl      _small_initial_num_blocks_is_11_9; \
+        jl      17f; \
         cmp     $16, NUM_BLOCKS; \
         je      16f; \
         cmp     $15, NUM_BLOCKS; \
@@ -2102,74 +2402,74 @@ ZMM_STORE_MASKED_BLOCKS_0_16(num_initial_blocks, CYPH_PLAIN_OUT,DATA_OFFSET, ZT3
         cmp     $14, NUM_BLOCKS; \
         je      14f; \
         jmp     13f; \
-_small_initial_num_blocks_is_11_9:; \
+17:; \
         cmp     $11, NUM_BLOCKS; \
         je      11f; \
         cmp     $10, NUM_BLOCKS; \
         je      10f; \
         jmp     9f; \
-_small_initial_num_blocks_is_7_1:; \
+18:; \
         cmp     $4, NUM_BLOCKS; \
         je      4f; \
-        jl      _small_initial_num_blocks_is_3_1; \
+        jl      19f; \
         cmp     $7, NUM_BLOCKS; \
         je      7f; \
         cmp     $6, NUM_BLOCKS; \
         je      6f; \
         jmp     5f; \
-_small_initial_num_blocks_is_3_1:; \
+19:; \
         cmp     $3, NUM_BLOCKS; \
-        je      3f; \
+        je      28f; \
         cmp     $2, NUM_BLOCKS; \
-        je      2f; \
+        je      27f; \
 1:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 1, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
-2:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 2, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
-3:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 3, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 1, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
+27:;     \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 2, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
+28:;     \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 3, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 4:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 4, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 4, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 5:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 5, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 5, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 6:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 6, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 6, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 7:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 7, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 7, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 8:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 8, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 8, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 9:;     \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 9, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 9, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 10:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 10, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 10, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 11:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 11, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 11, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 12:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 12, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 12, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 13:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 13, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 13, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 14:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 14, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 14, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 15:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 15, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-        jmp     _small_initial_blocks_encrypted;        \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 15, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+        jmp     20f;        \
 16:;    \
-        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 16, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK) \
-_small_initial_blocks_encrypted:;       \
+        INITIAL_BLOCKS_PARTIAL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, 16, CTR, HASH_IN_OUT, ENC_DEC, INSTANCE_TYPE, ZTMP0, ZTMP1, ZTMP2, ZTMP3, ZTMP4, ZTMP5, ZTMP6, ZTMP7, ZTMP8, ZTMP9, ZTMP10, ZTMP11, ZTMP12, ZTMP13, ZTMP14, ZTMP15, ZTMP16, ZTMP17, ZTMP18, ZTMP19, ZTMP20, ZTMP21, ZTMP22, GH, GL, GM, IA0, IA1, MASKREG, SHUFMASK, NROUNDS) \
+20:;       \
 
 #define ZMM_LOAD_BLOCKS_0_16(NUM_BLOCKS, INP, DATA_OFFSET, DST0, DST1, DST2, DST3) \
 .set src_offset, 0;	\
@@ -2277,7 +2577,7 @@ _small_initial_blocks_encrypted:;       \
         .endif; \
 .endif;	\
 
-#define INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, num_initial_blocks, CTR, AAD_HASH, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, IA0, IA1, END_DEC, MASKREG, SHUFMASK, PARTIAL_PRESENT) \
+#define INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, LENGTH, DATA_OFFSET, num_initial_blocks, CTR, AAD_HASH, ZT1, ZT2, ZT3, ZT4, ZT5, ZT6, ZT7, ZT8, ZT9, ZT10, ZT11, ZT12, IA0, IA1, END_DEC, MASKREG, SHUFMASK, PARTIAL_PRESENT, NROUNDS) \
 .set partial_block_possible, 1;	\
 .ifc PARTIAL_PRESENT, no_partial_block;	\
 	.set partial_block_possible, 0; \
@@ -2301,6 +2601,7 @@ _small_initial_blocks_encrypted:;       \
     .endif; \
     ZMM_OPCODE3_DSTR_SRC1R_SRC2R_BLOCKS_0_16(num_initial_blocks, vpshufb, ZT3, ZT4, no_zmm, no_zmm, ZT3, ZT4, no_zmm, no_zmm, SHUFMASK, SHUFMASK, SHUFMASK, SHUFMASK) \
     ZMM_LOAD_BLOCKS_0_16(num_initial_blocks, PLAIN_CYPH_IN, DATA_OFFSET, ZT5, ZT6, no_zmm, no_zmm) \
+.if NROUNDS==9;	\
     vbroadcastf64x2 (GDATA_KEY), ZT1; \
     ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 0, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
     vbroadcastf64x2 16(GDATA_KEY), ZT1; \
@@ -2323,6 +2624,65 @@ _small_initial_blocks_encrypted:;       \
     ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 9, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
     vbroadcastf64x2 160(GDATA_KEY), ZT1; \
     ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 10, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+.elseif NROUNDS==11;	\
+    vbroadcastf64x2 (GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 0, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 16(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 1, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 32(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 2, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 48(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 3, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 64(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 4, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 80(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 5, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 96(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 6, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 112(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 7, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 128(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 8, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 144(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 9, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 160(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 10, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 176(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 11, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 192(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 12, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+.elseif NROUNDS==13;	\
+    vbroadcastf64x2 (GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 0, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 16(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 1, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 32(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 2, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 48(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 3, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 64(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 4, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 80(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 5, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 96(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 6, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 112(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 7, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 128(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 8, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 144(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 9, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 160(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 10, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 176(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 11, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 192(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 12, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 208(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 13, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+    vbroadcastf64x2 224(GDATA_KEY), ZT1; \
+    ZMM_AESENC_ROUND_BLOCKS_0_16(ZT3, ZT4, no_zmm, no_zmm, ZT1, 14, ZT5, ZT6, no_zmm, no_zmm, num_initial_blocks, NROUNDS) \
+.endif;	\
     ZMM_STORE_BLOCKS_0_16(num_initial_blocks, CYPH_PLAIN_OUT, DATA_OFFSET, ZT3, ZT4, no_zmm, no_zmm) \
     .ifc ENC_DEC, DEC; \
     ZMM_OPCODE3_DSTR_SRC1R_SRC2R_BLOCKS_0_16(num_initial_blocks, vpshufb, ZT5, ZT6, no_zmm, no_zmm, ZT5, ZT6, no_zmm, no_zmm, SHUFMASK, SHUFMASK, SHUFMASK, SHUFMASK) \
@@ -2339,7 +2699,7 @@ _small_initial_blocks_encrypted:;       \
     vpshufb		SHUFMASK, ZT3, ZT3;	\
     vpshufb             SHUFMASK, ZT4, ZT4;  \
 .if partial_block_possible != 0;        \
-        mov     0xffff_ffff_ffff_ffff, IA0;     \
+        mov     0xffffffffffffffff, IA0;     \
         .if num_initial_blocks > 0;     \
                 cmp     $128, LENGTH;   \
                 jge     _initial_partial_block_continue;        \
@@ -2377,7 +2737,7 @@ _initial_partial_block_continue:;       \
         .set aes_round, aes_round + 1;  \
 .endr;  \
 .if num_initial_blocks > 0;     \
-        vmovdqu64       POLY(%rip), XWORD(ZT8); \
+        vmovdqu64       POLY2(%rip), XWORD(ZT8); \
 	VCLMUL_REDUCE(XWORD(AAD_HASH), XWORD(ZT8), XWORD(ZT6), XWORD(ZT5), XWORD(ZT7), XWORD(ZT9))      \
 .endif; \
 .rept (((NROUNDS + 1) / 3) + 2);        \
@@ -2401,11 +2761,11 @@ _initial_partial_block_continue:;       \
         mov             LENGTH, PBlockLen(GDATA_CTX);   \
         xor             LENGTH, LENGTH; \
         vmovdqu8        ZT4, ZT4{MASKREG}{z};   \
+1:;	\
 .else;  \
         ZMM_STORE_BLOCKS_0_16(8, CYPH_PLAIN_OUT, DATA_OFFSET, ZT3, ZT4, no_zmm, no_zmm) \
         add             $128, DATA_OFFSET;	\
         sub             $128, LENGTH;	\
-1:;  \
 .endif;	\
 .ifc  ENC_DEC, DEC;     \
         vpshufb         SHUFMASK, ZT1;  \
@@ -2416,7 +2776,7 @@ _initial_partial_block_continue:;       \
 .endif; \
         vpxorq          AAD_HASH, ZT1, ZT1;     \
 
-#define GHASH_8_ENCRYPT_8_PARALLEL(GDATA, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, DATA_OFFSET, CTR1, CTR2, GHASHIN_AESOUT_B03, GHASHIN_AESOUT_B47, AES_PARTIAL_BLOCK, loop_idx, ENC_DEC, FULL_PARTIAL, IA0, IA1, LENGTH, INSTANCE_TYPE, GH4KEY, GH8KEY, SHFMSK, ZT1, ZT2, ZT3, ZT4, ZT5, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, MASKREG, DO_REDUCTION, TO_REDUCE_L, TO_REDUCE_H, TO_REDUCE_M) \
+#define GHASH_8_ENCRYPT_8_PARALLEL(GDATA, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, DATA_OFFSET, CTR1, CTR2, GHASHIN_AESOUT_B03, GHASHIN_AESOUT_B47, AES_PARTIAL_BLOCK, loop_idx, ENC_DEC, FULL_PARTIAL, IA0, IA1, LENGTH, INSTANCE_TYPE, GH4KEY, GH8KEY, SHFMSK, ZT1, ZT2, ZT3, ZT4, ZT5, ZT10, ZT11, ZT12, ZT13, ZT14, ZT15, ZT16, ZT17, MASKREG, DO_REDUCTION, TO_REDUCE_L, TO_REDUCE_H, TO_REDUCE_M, NROUNDS) \
 .ifc loop_idx, in_order; \
         vpshufb         SHFMSK, CTR1, ZT1; \
         vpshufb         SHFMSK, CTR2, ZT2; \
@@ -2483,8 +2843,15 @@ _initial_partial_block_continue:;       \
         VHPXORI4x128    ZT15, ZT11; \
 .endif; \
 .if 9 < (NROUNDS + 1); \
+.if NROUNDS==9;	\
         vbroadcastf64x2 16*9(GDATA), ZT3; \
         ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 9, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.else;	\
+	vbroadcastf64x2 16*9(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 9, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+	vbroadcastf64x2 16*10(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 10, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.endif;	\
 .endif; \
 .ifnc DO_REDUCTION, no_reduction; \
         vmovdqu64       POLY2(%rip), XWORD(ZT17); \
@@ -2492,6 +2859,17 @@ _initial_partial_block_continue:;       \
         vpslldq         $8, XWORD(ZT15), XWORD(ZT15); \
         vpxorq          XWORD(ZT15), XWORD(ZT11), XWORD(ZT15); \
 .endif; \
+.if 11 < (NROUNDS + 1); \
+.if NROUNDS==11; \
+        vbroadcastf64x2 16*11(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 11, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.else;  \
+        vbroadcastf64x2 16*11(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 11, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+        vbroadcastf64x2 16*12(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 12, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.endif;	\
+.endif;	\
 .ifnc DO_REDUCTION, no_reduction; \
         vpclmulqdq      $0x00, XWORD(ZT15), XWORD(ZT17), XWORD(ZT16); \
         vpsrldq         $4, XWORD(ZT16), XWORD(ZT16); \
@@ -2499,6 +2877,10 @@ _initial_partial_block_continue:;       \
         vpslldq         $4, XWORD(ZT13), XWORD(ZT13); \
         vpternlogq      $0x96, XWORD(ZT10), XWORD(ZT16), XWORD(ZT13); \
 .endif; \
+.if 13 < (NROUNDS + 1); \
+	vbroadcastf64x2 16*13(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 13, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.endif;	\
 .ifc FULL_PARTIAL, full; \
         vmovdqu8        (PLAIN_CYPH_IN, DATA_OFFSET), ZT4; \
         vmovdqu8        64(PLAIN_CYPH_IN, DATA_OFFSET), ZT5; \
@@ -2510,8 +2892,16 @@ _initial_partial_block_continue:;       \
         vmovdqu8        (PLAIN_CYPH_IN, DATA_OFFSET), ZT4; \
         vmovdqu8        64(PLAIN_CYPH_IN, DATA_OFFSET), ZT5{MASKREG}{z}; \
 .endif; \
+.if NROUNDS == 9; \
         vbroadcastf64x2 16*10(GDATA), ZT3; \
         ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 10, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.elseif NROUNDS == 11;	\
+	vbroadcastf64x2 16*12(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 12, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.elseif NROUNDS == 13;  \
+        vbroadcastf64x2 16*14(GDATA), ZT3; \
+        ZMM_AESENC_ROUND_BLOCKS_0_16(ZT1, ZT2, no_zmm, no_zmm, ZT3, 14, ZT4, ZT5, no_zmm, no_zmm, 8, NROUNDS) \
+.endif;	\
 .ifc FULL_PARTIAL, full; \
         vmovdqu8        ZT1, (CYPH_PLAIN_OUT, DATA_OFFSET); \
         vmovdqu8        ZT2, 64(CYPH_PLAIN_OUT, DATA_OFFSET); \
@@ -2559,12 +2949,12 @@ _initial_partial_block_continue:;       \
         vpxorq          GL, ZTL, ZTL;   \
         vpxorq          GM, ZTM, ZTM;   \
 	VCLMUL_STEP2_9(GDATA, BL47, BL03, ZT01, ZT02, ZT03, ZTH, ZTM, ZTL)	\
-        vmovdqa64       POLY(%rip), XWORD(ZT03);        \
+        vmovdqa64       POLY2(%rip), XWORD(ZT03);        \
 	VCLMUL_REDUCE(AAD_HASH, XWORD(ZT03), XWORD(BL47), XWORD(BL03), XWORD(ZT01), XWORD(ZT02))        \
 
-#define GCM_ENC_DEC(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC_DEC, INSTANCE_TYPE)        \
+#define GCM_ENC_DEC(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC_DEC, INSTANCE_TYPE, NROUNDS)        \
         or              PLAIN_CYPH_LEN, PLAIN_CYPH_LEN; \
-        je              _gcm_enc_dec_done;                  \
+        je              21f;                  \
         xor             %r11, %r11;       \
         add             PLAIN_CYPH_LEN, InLen(GDATA_CTX);       \
         vmovdqu64       AadHash(GDATA_CTX), %xmm14;          \
@@ -2579,80 +2969,80 @@ _initial_partial_block_continue:;       \
 	mov     PLAIN_CYPH_LEN, %r13;         \
         .ifc INSTANCE_TYPE, multi_call;         \
         sub     %r11, %r13;            \
-        je      _gcm_enc_dec_done;                  \
+        je      21f;                  \
         .endif; \
 	vmovdqa64       SHUF_MASK(%rip), %zmm29;    \
         vmovdqa64       ddq_addbe_4444(%rip), %zmm27;        \
         cmp             $(big_loop_nblocks * 16), %r13;      \
-	jl              _message_below_big_nblocks;        \
+	jl              12f;        \
 	vmovdqa64	ddq_addbe_1234(%rip), %zmm28;		\
-	INITIAL_BLOCKS_Nx16(%rcx, %rdx, %rdi, %r11, %zmm14, %zmm9, %r15, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, %zmm24 , %zmm25, %zmm26, %zmm27, %zmm28, %zmm29, ENC, 48, 32)    \
+	INITIAL_BLOCKS_Nx16(%rcx, %rdx, %rdi, %r11, %zmm14, %zmm9, %r15, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, %zmm24 , %zmm25, %zmm26, %zmm27, %zmm28, %zmm29, ENC_DEC, 48, 32, NROUNDS)    \
 	sub             $(big_loop_nblocks * 16), %r13;    \
         cmp             $(big_loop_nblocks * 16), %r13;    \
-	jl              _no_more_big_nblocks;      \
-_encrypt_big_nblocks:;     \
-	GHASH_ENCRYPT_Nx16_PARALLEL(%rcx, %rdx, %rdi, %r11, %zmm9, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, %zmm24, %zmm25, %zmm26, %zmm27, %zmm28, %zmm14, ENC, 48, 32, %r15)       \
+	jl              11f;      \
+10:;     \
+	GHASH_ENCRYPT_Nx16_PARALLEL(%rcx, %rdx, %rdi, %r11, %zmm9, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, %zmm24, %zmm25, %zmm26, %zmm27, %zmm28, %zmm14, ENC_DEC, 48, 32, %r15, NROUNDS)       \
 	sub             $(big_loop_nblocks * 16), %r13;    \
         cmp             $(big_loop_nblocks * 16), %r13;    \
-	jge             _encrypt_big_nblocks;      \
-_no_more_big_nblocks:;     \
+	jge             10b;      \
+11:;     \
 	vpshufb         %xmm29, %xmm9, %xmm9; \
         vmovdqa64       %xmm9, XWORD(%zmm28);           \
 	GHASH_LAST_Nx16(GDATA_KEY, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm24, %zmm25, %zmm26, 48, 32)   \
 	or              %r13, %r13;     \
-	jz              _ghash_done;    \
-_message_below_big_nblocks:;       \
+	jz              20f;    \
+12:;       \
 	cmp             $256, %r13;     \
-	jge		_large_message_path;	\
+	jge		13f;	\
 	mov             %r13, %r12;     \
         add             $15, %r12;      \
         shr             $4, %r12;       \
-	GCM_ENC_DEC_SMALL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC, %r11, %r13, %r12, %xmm9, %xmm14, INSTANCE_TYPE, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, no_zmm, no_zmm, no_zmm, %r10, %r15, %k1, %zmm29)     \
+	GCM_ENC_DEC_SMALL(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, PLAIN_CYPH_LEN, ENC_DEC, %r11, %r13, %r12, %xmm9, %xmm14, INSTANCE_TYPE, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %zmm19, %zmm20, %zmm21, %zmm30, %zmm31, %zmm1, %zmm2, %zmm8, %zmm22, %zmm23, no_zmm, no_zmm, no_zmm, %r10, %r15, %k1, %zmm29, NROUNDS)     \
 	vmovdqa64       %xmm9, %xmm28;	\
-	jmp     _ghash_done;     \
-_large_message_path:;   \
+	jmp     20f;     \
+13:;   \
         mov             %r13, %r12;     \
         and             $0xff, %r12;    \
         add             $15, %r12;      \
         shr             $4, %r12;       \
         and             $7, %r12;       \
-        je              _initial_num_blocks_is_0;       \
+        je              8f;       \
         cmp             $1, %r12;       \
-        je              _initial_num_blocks_is_1;       \
+        je              1f;       \
         cmp             $2, %r12;       \
-        je              _initial_num_blocks_is_2;       \
+        je              2f;       \
         cmp             $3, %r12;       \
-        je              _initial_num_blocks_is_3;       \
+        je              3f;       \
         cmp             $4, %r12; \
-        je              _initial_num_blocks_is_4;       \
+        je              4f;       \
         cmp             $5, %r12; \
-        je              _initial_num_blocks_is_5;       \
+        je              5f;       \
         cmp             $6, %r12; \
-        je              _initial_num_blocks_is_6;       \
-_initial_num_blocks_is_7:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 7, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_6:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 6, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_5:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 5, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_4:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 4, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_3:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 3, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_2:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 2, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_1:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 1, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-        jmp     _initial_blocks_encrypted;      \
-_initial_num_blocks_is_0:;      \
-        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 0, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC, %k1, %zmm29, no_partial_block)     \
-_initial_blocks_encrypted:;     \
+        je              6f;       \
+7:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 7, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+6:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 6, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+5:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 5, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+4:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 4, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+3:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 3, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+2:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 2, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+1:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 1, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+        jmp     9f;      \
+8:;      \
+        INITIAL_BLOCKS(GDATA_KEY, GDATA_CTX, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r13, %r11, 0, %xmm9, %zmm14, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %r10, %r12, ENC_DEC, %k1, %zmm29, no_partial_block, NROUNDS)     \
+9:;     \
         vmovdqa64       %xmm9, XWORD(%zmm28);    \
         vmovdqa64       %zmm0, %zmm1;   \
         vmovdqa64       %zmm3, %zmm2;   \
@@ -2679,27 +3069,27 @@ _initial_blocks_encrypted:;     \
         vpshufb         %zmm29, %zmm9, %zmm9;        \
         vpshufb         %zmm29, %zmm18, %zmm18;      \
         cmp             $128, %r13;     \
-        jl              _encrypt_by_8_partial;  \
-_encrypt_by_8_parallel:; \
+        jl              17f;  \
+14:; \
         vmovq           XWORD(%zmm28), %r15;    \
-_encrypt_by_8_new:;     \
+15:;     \
         and             $255, WORD(%r15);       \
         add             $8, WORD(%r15);         \
         vmovdqu64       64(%rax), %zmm31;       \
         vmovdqu64       (%rax), %zmm30;         \
-	GHASH_8_ENCRYPT_8_PARALLEL(GDATA_KEY, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r11, %zmm9, %zmm18, %zmm1, %zmm2, %xmm8, out_order, ENC, full, %r10, %r12, %r13, INSTANCE_TYPE, %zmm31, %zmm30, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %k1, no_reduction, %zmm25, %zmm24, %zmm26)      \
+	GHASH_8_ENCRYPT_8_PARALLEL(GDATA_KEY, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r11, %zmm9, %zmm18, %zmm1, %zmm2, %xmm8, out_order, ENC_DEC, full, %r10, %r12, %r13, INSTANCE_TYPE, %zmm31, %zmm30, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %k1, no_reduction, %zmm25, %zmm24, %zmm26, NROUNDS)      \
 	add             $128, %rax;             \
         add             $128, %r11;             \
         sub             $128, %r13;             \
-        jz              _encrypt_done;          \
+        jz              18f;          \
         cmp             $248, WORD(%r15);       \
-        jae             _encrypt_by_8;          \
+        jae             16f;          \
         vpaddd          %zmm27, %zmm9, %zmm9;           \
         vpaddd          %zmm27, %zmm18, %zmm18;          \
         cmp             $128, %r13;             \
-        jl              _encrypt_by_8_partial;  \
-        jmp             _encrypt_by_8_new;      \
-_encrypt_by_8:; \
+        jl              17f;  \
+        jmp             15b;      \
+16:; \
         vpshufb         %zmm29, %zmm9, %zmm9;   \
         vpshufb         %zmm29, %zmm18, %zmm18; \
         vpaddd          %zmm19, %zmm9, %zmm9;  \
@@ -2707,11 +3097,11 @@ _encrypt_by_8:; \
         vpshufb         %zmm29, %zmm9, %zmm9;  \
         vpshufb         %zmm29, %zmm18, %zmm18; \
         cmp             $128, %r13;     \
-        jge             _encrypt_by_8_new;      \
-_encrypt_by_8_partial:; \
+        jge             15b;      \
+17:; \
         vmovdqu64       64(%rax), %zmm31;       \
         vmovdqu64       (%rax), %zmm30;         \
-        GHASH_8_ENCRYPT_8_PARALLEL(GDATA_KEY, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r11, %zmm9, %zmm18, %zmm1, %zmm2, %xmm8, out_order, ENC, partial, %r10, %r12, %r13, INSTANCE_TYPE, %zmm31, %zmm30, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %k1, no_reduction, %zmm25, %zmm24, %zmm26)      \
+        GHASH_8_ENCRYPT_8_PARALLEL(GDATA_KEY, CYPH_PLAIN_OUT, PLAIN_CYPH_IN, %r11, %zmm9, %zmm18, %zmm1, %zmm2, %xmm8, out_order, ENC_DEC, partial, %r10, %r12, %r13, INSTANCE_TYPE, %zmm31, %zmm30, %zmm29, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %zmm11, %zmm12, %zmm13, %zmm15, %zmm16, %zmm17, %k1, no_reduction, %zmm25, %zmm24, %zmm26, NROUNDS)      \
         add             $128, %rax;             \
         add             $112, %r11;             \
         sub             $112, %r13;             \
@@ -2719,23 +3109,23 @@ _encrypt_by_8_partial:; \
         mov             %r13, PBlockLen(GDATA_CTX);     \
         vmovdqu64       %xmm8, PBlockEncKey(GDATA_CTX); \
         .endif;         \
-_encrypt_done:; \
+18:; \
         vextracti32x4   $3, %zmm18, XWORD(%zmm28);      \
         vpshufb         XWORD(%zmm29), XWORD(%zmm28), XWORD(%zmm28);      \
         .ifc INSTANCE_TYPE, multi_call; \
         cmpq            $0, PBlockLen(GDATA_CTX);       \
-        jz              _hash_last_8;   \
+        jz              19f;   \
         vextracti32x4   $3, %zmm2, XWORD(%zmm11);       \
 	GHASH_LAST_7(GDATA_KEY, %zmm2, %zmm1, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm10, %xmm14, %k1, %r10, %zmm24, %zmm25, %zmm26)      \
         vpxorq          XWORD(%zmm11), %xmm14, %xmm14; \
-        jmp             _ghash_done;    \
-_hash_last_8:;          \
+        jmp             20f;    \
+19:;          \
 	.endif;         \
 	GHASH_LAST_8(GDATA_KEY, %zmm2, %zmm1, %zmm0, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %xmm14, %zmm24, %zmm25, %zmm26)      \
-_ghash_done:;	\
+20:;	\
 	vmovdqu64       XWORD(%zmm28), CurCount(GDATA_CTX);     \
         vmovdqu64       %xmm14, (GDATA_CTX);    \
-_gcm_enc_dec_done:;     \
+21:;
 
 #define simd_store_avx(DST, SRC, SIZE, TMP, IDX)        \
         xor IDX, IDX;           \
@@ -2815,15 +3205,124 @@ aes_keyexp_128_enc_vaes_avx512:
         key_expansion_128_avx
         vmovdqa %xmm1, 16*10(EXP_ENC_KEYS)
 
-aes_keyexp_128_enc_avx_return:
         ret
+
+.global aes_keyexp_192_enc_vaes_avx512
+
+aes_keyexp_192_enc_vaes_avx512:
+	vmovq 16(KEY), %xmm7
+        vmovq %xmm7, 16(EXP_ENC_KEYS)
+        vpshufd $0x4f, %xmm7, %xmm4
+        vmovdqu (KEY), %xmm1
+        vmovdqu %xmm1, (EXP_ENC_KEYS)
+
+        vpxor %xmm3, %xmm3, %xmm3
+        vpxor %xmm6, %xmm6, %xmm6
+
+	vaeskeygenassist $0x1, %xmm4, %xmm2
+        key_expansion_1_192_avx(24)
+                key_expansion_2_192_avx(40)
+
+	vaeskeygenassist $0x2, %xmm4, %xmm2
+        key_expansion_1_192_avx(48)
+                key_expansion_2_192_avx(64)
+
+	vaeskeygenassist $0x4, %xmm4, %xmm2
+        key_expansion_1_192_avx(72)
+                key_expansion_2_192_avx(88)
+
+        vaeskeygenassist $0x8, %xmm4, %xmm2
+        key_expansion_1_192_avx(96)
+                key_expansion_2_192_avx(112)
+
+	vaeskeygenassist $0x10, %xmm4, %xmm2
+        key_expansion_1_192_avx(120)
+                key_expansion_2_192_avx(136)
+
+        vaeskeygenassist $0x20, %xmm4, %xmm2
+        key_expansion_1_192_avx(144)
+                key_expansion_2_192_avx(160)
+
+        vaeskeygenassist $0x40, %xmm4, %xmm2
+        key_expansion_1_192_avx(168)
+                key_expansion_2_192_avx(184)
+
+        vaeskeygenassist $0x80, %xmm4, %xmm2
+        key_expansion_1_192_avx(192)
+
+        ret
+
+.global aes_keyexp_256_enc_vaes_avx512
+
+aes_keyexp_256_enc_vaes_avx512:
+	vmovdqu (KEY), %xmm1
+        vmovdqa %xmm1, (EXP_ENC_KEYS)
+
+        vmovdqu 16(KEY), %xmm4
+        vmovdqa %xmm4, 16(EXP_ENC_KEYS)
+
+        vpxor %xmm3, %xmm3, %xmm3
+
+	vaeskeygenassist $0x1, %xmm4, %xmm2
+        key_expansion_256_avx
+	vmovdqa	%xmm1, 16*2(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x1, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*3(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x2, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*4(EXP_ENC_KEYS)
+
+        vaeskeygenassist $0x2, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*5(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x4, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*6(EXP_ENC_KEYS)
+
+        vaeskeygenassist $0x4, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*7(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x8, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*8(EXP_ENC_KEYS)
+
+        vaeskeygenassist $0x8, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*9(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x10, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*10(EXP_ENC_KEYS)
+
+        vaeskeygenassist $0x10, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*11(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x20, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*12(EXP_ENC_KEYS)
+
+        vaeskeygenassist $0x20, %xmm1, %xmm2
+        key_expansion_256_avx_2
+        vmovdqa %xmm4, 16*13(EXP_ENC_KEYS)
+
+	vaeskeygenassist $0x40, %xmm4, %xmm2
+        key_expansion_256_avx
+        vmovdqa %xmm1, 16*14(EXP_ENC_KEYS)
+
+	ret
 
 .global aes_gcm_precomp_128_vaes_avx512
 
 aes_gcm_precomp_128_vaes_avx512:
 	FUNC_SAVE()
 	vpxor   %xmm6, %xmm6, %xmm6
-	ENCRYPT_SINGLE_BLOCK(%rdi, %xmm6)
+	ENCRYPT_SINGLE_BLOCK(%rdi, %xmm6, 9)
 
 	vpshufb SHUF_MASK(%rip), %xmm6, %xmm6
 	vmovdqa %xmm6, %xmm2
@@ -2844,53 +3343,427 @@ aes_gcm_precomp_128_vaes_avx512:
 	PRECOMPUTE(%rdi, %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5)
 
 	FUNC_RESTORE() 
-exit_precomp:
 	ret
 
-.global aes_gcm_init_var_iv_128_vaes_avx512
+.global aes_gcm_precomp_192_vaes_avx512
 
-aes_gcm_init_var_iv_128_vaes_avx512:
+aes_gcm_precomp_192_vaes_avx512:
+        FUNC_SAVE()
+        vpxor   %xmm6, %xmm6, %xmm6
+        ENCRYPT_SINGLE_BLOCK(%rdi, %xmm6, 11)
+
+        vpshufb SHUF_MASK(%rip), %xmm6, %xmm6
+        vmovdqa %xmm6, %xmm2
+        vpsllq  $1, %xmm6, %xmm6
+        vpsrlq  $63, %xmm2, %xmm2
+        vmovdqa %xmm2, %xmm1
+        vpslldq $8, %xmm2, %xmm2
+        vpsrldq $8, %xmm1, %xmm1
+        vpor    %xmm2, %xmm6, %xmm6
+
+        vpshufd  $0x24, %xmm1, %xmm2
+        vpcmpeqd TWOONE(%rip), %xmm2, %xmm2
+        vpand    POLY(%rip), %xmm2, %xmm2
+        vpxor    %xmm2, %xmm6, %xmm6
+
+        vmovdqu  %xmm6, HashKey(%rdi)
+
+        PRECOMPUTE(%rdi, %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_precomp_256_vaes_avx512
+
+aes_gcm_precomp_256_vaes_avx512:
+        FUNC_SAVE()
+        vpxor   %xmm6, %xmm6, %xmm6
+        ENCRYPT_SINGLE_BLOCK(%rdi, %xmm6, 13)
+
+        vpshufb SHUF_MASK(%rip), %xmm6, %xmm6
+        vmovdqa %xmm6, %xmm2
+        vpsllq  $1, %xmm6, %xmm6
+        vpsrlq  $63, %xmm2, %xmm2
+        vmovdqa %xmm2, %xmm1
+        vpslldq $8, %xmm2, %xmm2
+        vpsrldq $8, %xmm1, %xmm1
+        vpor    %xmm2, %xmm6, %xmm6
+
+        vpshufd  $0x24, %xmm1, %xmm2
+        vpcmpeqd TWOONE(%rip), %xmm2, %xmm2
+        vpand    POLY(%rip), %xmm2, %xmm2
+        vpxor    %xmm2, %xmm6, %xmm6
+
+        vmovdqu  %xmm6, HashKey(%rdi)
+
+        PRECOMPUTE(%rdi, %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_init_vaes_avx512
+aes_gcm_init_vaes_avx512:
 	FUNC_SAVE()
 
-	GCM_INIT(%rdi, %rsi, %rdx, %r8, %r9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %rcx)
+	GCM_INIT(%rdi, %rsi, %rdx, %r8, %r9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_init_var_iv_vaes_avx512
+
+aes_gcm_init_var_iv_vaes_avx512:
+	FUNC_SAVE()
+
+	cmp     $12, %rcx
+        je      iv_len_12_init_IV
+
+        GCM_INIT(%rdi, %rsi, %rdx, %r8, %r9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %rcx, 22)
+
+        jmp exit_init_IV
+
+iv_len_12_init_IV:
+        GCM_INIT(%rdi, %rsi, %rdx, %r8, %r9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
 
 exit_init_IV:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_var_init_128_vaes_avx512
+
+aes_gcm_enc_var_init_128_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_enc_IV_128
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp	skip_iv_len_12_enc_IV_128
+
+iv_len_12_enc_IV_128:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_enc_IV_128:
+	GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 9)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, ENC, single_call, 9)
+
+exit_enc_IV_128:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_var_init_192_vaes_avx512
+
+aes_gcm_enc_var_init_192_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_enc_IV_192
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp     skip_iv_len_12_enc_IV_192
+
+iv_len_12_enc_IV_192:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_enc_IV_192:
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 11)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, ENC, single_call, 11)
+
+exit_enc_IV_192:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_var_init_256_vaes_avx512
+
+aes_gcm_enc_var_init_256_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_enc_IV_256
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp     skip_iv_len_12_enc_IV_256
+
+iv_len_12_enc_IV_256:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_enc_IV_256:
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 13)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, ENC, single_call, 13)
+
+exit_enc_IV_256:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_var_init_128_vaes_avx512
+
+aes_gcm_dec_var_init_128_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_dec_IV_128
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp     skip_iv_len_12_dec_IV_128
+
+iv_len_12_dec_IV_128:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_dec_IV_128:
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 9)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, DEC, single_call, 9)
+
+exit_dec_IV_128:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_var_init_192_vaes_avx512
+
+aes_gcm_dec_var_init_192_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_dec_IV_192
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp     skip_iv_len_12_dec_IV_192
+
+iv_len_12_dec_IV_192:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_dec_IV_192:
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 11)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, DEC, single_call, 11)
+
+exit_dec_IV_192:
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_var_init_256_vaes_avx512
+
+aes_gcm_dec_var_init_256_vaes_avx512:
+        FUNC_SAVE()
+
+        cmp     $12, arg7
+        je      iv_len_12_dec_IV_256
+
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, arg7, 22)
+
+        jmp     skip_iv_len_12_dec_IV_256
+
+iv_len_12_dec_IV_256:
+        GCM_INIT(arg1, arg2, arg6, arg8, arg9, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm11, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+
+skip_iv_len_12_dec_IV_256:
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 13)
+        GCM_COMPLETE(arg1, arg2, arg10, arg11, DEC, single_call, 13)
+
+exit_dec_IV_256:
         FUNC_RESTORE()
         ret
 
 .global aes_gcm_enc_128_finalize_vaes_avx512
 
 aes_gcm_enc_128_finalize_vaes_avx512:
-	FUNC_SAVE()
-        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, ENC, multi_call)
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, ENC, multi_call, 9)
         FUNC_RESTORE()
 
-exit_enc_fin:
+        ret
+
+.global aes_gcm_enc_192_finalize_vaes_avx512
+
+aes_gcm_enc_192_finalize_vaes_avx512:
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, ENC, multi_call, 11)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_enc_256_finalize_vaes_avx512
+
+aes_gcm_enc_256_finalize_vaes_avx512:
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, ENC, multi_call, 13)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_dec_128_finalize_vaes_avx512
+
+aes_gcm_dec_128_finalize_vaes_avx512:
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, DEC, multi_call, 9)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_dec_192_finalize_vaes_avx512
+
+aes_gcm_dec_192_finalize_vaes_avx512:
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, DEC, multi_call, 11)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_dec_256_finalize_vaes_avx512
+
+aes_gcm_dec_256_finalize_vaes_avx512:
+        FUNC_SAVE()
+        GCM_COMPLETE(%rdi, %rsi, %rdx, %rcx, DEC, multi_call, 13)
+        FUNC_RESTORE()
+
         ret
 
 .global aes_gcm_enc_128_update_vaes_avx512
 
 aes_gcm_enc_128_update_vaes_avx512:
-	FUNC_SAVE()
+        FUNC_SAVE()
 
-	GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, ENC, multi_call)
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, ENC, multi_call, 9)
 
-exit_update_enc:
-	FUNC_RESTORE()
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_192_update_vaes_avx512
+
+aes_gcm_enc_192_update_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, ENC, multi_call, 11)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_256_update_vaes_avx512
+
+aes_gcm_enc_256_update_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, ENC, multi_call, 13)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_128_update_vaes_avx512
+
+aes_gcm_dec_128_update_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, DEC, multi_call, 9)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_192_update_vaes_avx512
+
+aes_gcm_dec_192_update_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, DEC, multi_call, 11)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_dec_256_update_vaes_avx512
+
+aes_gcm_dec_256_update_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_ENC_DEC(%rdi, %rsi, %rdx, %rcx, %r8, DEC, multi_call, 13)
+
+        FUNC_RESTORE()
+        ret
+
+.global aes_gcm_enc_128_vaes_avx512
+
+aes_gcm_enc_128_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 9)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, ENC, single_call, 9)
+        FUNC_RESTORE()
+
 	ret
+
+.global aes_gcm_enc_192_vaes_avx512
+
+aes_gcm_enc_192_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 11)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, ENC, single_call, 11)
+        FUNC_RESTORE()
+
+	ret
+
+.global aes_gcm_enc_256_vaes_avx512
+
+aes_gcm_enc_256_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, ENC, single_call, 13)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, ENC, single_call, 13)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_dec_128_vaes_avx512
+
+aes_gcm_dec_128_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 9)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, DEC, single_call, 9)
+        FUNC_RESTORE()
+
+        ret
+
+.global aes_gcm_dec_192_vaes_avx512
+
+aes_gcm_dec_192_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 11)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, DEC, single_call, 11)
+        FUNC_RESTORE()
+
+	ret
+
+.global aes_gcm_dec_256_vaes_avx512
+
+aes_gcm_dec_256_vaes_avx512:
+        FUNC_SAVE()
+
+        GCM_INIT(arg1, arg2, arg6, arg7, arg8, %r10, %r11, %r12, %k1, %xmm14, %xmm2, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, NULL, 21)
+        GCM_ENC_DEC(arg1, arg2, arg3, arg4, arg5, DEC, single_call, 13)
+        GCM_COMPLETE(arg1, arg2, arg9, arg10, DEC, single_call, 13)
+        FUNC_RESTORE()
+
+        ret
 
 .global ghash_vaes_avx512
 
 ghash_vaes_avx512:
         FUNC_SAVE()
 
-	CALC_AAD_HASH(%rsi, %rdx, %xmm0, %rdi, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %r10, %r11, %r12, %k1)
+        CALC_AAD_HASH(%rsi, %rdx, %xmm0, %rdi, %zmm1, %zmm2, %zmm3, %zmm4, %zmm5, %zmm6, %zmm7, %zmm8, %zmm9, %zmm10, %r10, %r11, %r12, %k1)
 
-	vpshufb SHUF_MASK(%rip), %xmm0, %xmm0
+        vpshufb SHUF_MASK(%rip), %xmm0, %xmm0
 
         simd_store_avx(%rcx, %xmm0, %r8, %r12, %rax)
 
-	FUNC_RESTORE()
+        FUNC_RESTORE()
 
         ret
-
